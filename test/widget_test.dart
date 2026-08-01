@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/test/test_flutter_secure_storage_platform.dart';
+import 'package:flutter_secure_storage_platform_interface/flutter_secure_storage_platform_interface.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -11,6 +13,10 @@ import 'package:streamio/features/setup/server_setup_screen.dart';
 void main() {
   setUpAll(() {
     MediaKit.ensureInitialized();
+    // The real plugin blocks indefinitely on a desktop test VM (no keyring
+    // service to answer it), which hangs every test that reaches token
+    // restore. The package ships this in-memory fake for exactly that.
+    FlutterSecureStoragePlatform.instance = TestFlutterSecureStoragePlatform({});
   });
 
   testWidgets('first launch lands on the server setup screen',
@@ -55,8 +61,8 @@ void main() {
 
     await tester.pumpWidget(const ProviderScope(child: StreamioApp()));
     // The stored server resolves, then the session restore does — the latter
-    // fails here because flutter_secure_storage has no test implementation,
-    // which is exactly the "no session" case.
+    // finds no tokens in the fake keystore, which is exactly the "no
+    // session" case.
     await tester.pumpAndSettle();
 
     expect(find.byType(LoginScreen), findsOneWidget);
