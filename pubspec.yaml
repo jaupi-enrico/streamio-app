@@ -1,0 +1,98 @@
+name: streamio
+description: Streamio
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # State management
+  flutter_riverpod: ^2.5.1
+
+  # HTTP to the Streamio backend (api_client) and to CDNs while downloading
+  dio: ^5.7.0
+
+  # Server address + provider choice (the web app's localStorage)
+  shared_preferences: ^2.3.2
+
+  # Fonts (Bebas Neue + DM Sans, like the Google Fonts <link> tags)
+  google_fonts: ^6.2.1
+
+  # Cached network images for posters/banners (better than raw Image.network)
+  cached_network_image: ^3.4.1
+
+  # Routing (maps to /, /catalog, /search, /providers, /account, /details, ...)
+  go_router: ^14.6.2
+
+  # Download queue + offline library
+  drift: ^2.21.0
+  sqlite3_flutter_libs: ^0.5.26
+  path: ^1.9.0
+  path_provider: ^2.1.4
+
+  # Video playback (HLS + custom headers, demuxed audio/video)
+  media_kit: ^1.1.11
+  media_kit_video: ^1.2.5
+  media_kit_libs_video: ^1.0.5
+
+  # Auth / secure storage / OAuth
+  flutter_secure_storage: ^9.2.2
+  flutter_web_auth_2: ^4.1.0
+
+  # Flushes offline playback progress when connectivity returns
+  connectivity_plus: ^6.1.0
+
+  # Watch-party realtime channel (/ws/rooms/:code)
+  web_socket_channel: ^3.0.1
+
+  # Offline downloads: AES-CTR at rest (seekable, so the loopback player can
+  # serve byte ranges without decrypting a whole segment file)
+  pointycastle: ^3.9.1
+
+  # Share sheet for watch-party invite links
+  share_plus: ^10.1.2
+
+  # Chromecast sender (uses the deployment's own receiver id)
+  flutter_chrome_cast: ^1.4.6
+
+  # Download ids, temp manifest filenames
+  uuid: ^4.5.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+  # Only drift generates code here; freezed/json_serializable/riverpod_generator
+  # were carried over from an earlier iteration and had nothing to generate.
+  build_runner: ^2.4.13
+  drift_dev: ^2.21.0
+  flutter_launcher_icons: ^0.14.4
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/icon/
+
+# Launcher icons, generated from the website's own mark
+# (web/public/icons/site-icon.png) so the app and the site read as one thing.
+# Regenerate after changing the source art:
+#   dart run flutter_launcher_icons
+flutter_launcher_icons:
+  image_path: "assets/icon/app-icon.png"
+
+  android: true
+  # The source art is black on transparent, so it needs a backdrop to be a
+  # launcher icon at all — white, which is how the favicon reads on a browser
+  # tab. The adaptive foreground is padded to survive the launcher's mask.
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/icon/app-icon-foreground.png"
+
+  ios: true
+  # iOS rejects icons with an alpha channel.
+  remove_alpha_ios: true
