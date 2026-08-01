@@ -101,12 +101,9 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
   Timer? _progressTimer;
   int _lastSavedSeconds = -1;
 
-  /// The resume point handed to [Media.start]. mpv applies that via an
-  /// `on_load` hook, but for network HLS the demuxer often isn't seekable
-  /// until the stream is actually open, so the hook's seek can silently lose
-  /// to mpv landing back at 0 once real playback begins. Re-asserted once
-  /// (below) as soon as a real duration confirms the stream is up.
-  Duration? _pendingResumeStart;
+  /// Bumped on every [_load]. Lets a stray [_confirmResumePosition] from a
+  /// superseded load (server switch, retry) recognize it's stale and stop.
+  int _loadGeneration = 0;
 
   bool get _isOffline => widget.downloadId != null;
   String get _contentType => widget.contentType ?? 'episode';
@@ -132,16 +129,6 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
       _player.stream.duration.listen((duration) {
         if (!mounted) return;
         setState(() => _duration = duration);
-
-        final pending = _pendingResumeStart;
-        if (pending != null && duration > Duration.zero) {
-          _pendingResumeStart = null;
-          // mpv's own resume landed near 0 despite Media.start — force it.
-          if ((_player.state.position - pending).abs() >
-              const Duration(seconds: 5)) {
-            _player.seek(pending);
-          }
-        }
       }),
       _player.stream.playing.listen((playing) {
         if (!mounted) return;
@@ -187,10 +174,10 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
       _loading = true;
       _error = null;
     });
+    final generation = ++_loadGeneration;
 
     try {
       final start = await _resolveStartPosition();
-      _pendingResumeStart = start;
       final media = _isOffline
           ? await _offlineMedia(start: start)
           : await _onlineMedia(serverIndex: serverIndex ?? _serverIndex, start: start);
@@ -198,6 +185,7 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
       await _player.open(media);
       if (mounted) setState(() => _loading = false);
       _startProgressTimer();
+      unawaited(_confirmResumePosition(start, generation));
     } catch (err) {
       if (mounted) {
         setState(() {
@@ -205,6 +193,36 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
           _loading = false;
         });
       }
+    }
+  }
+
+  /// mpv applies [Media.start] via an `on_load` hook, but for network HLS the
+  /// demuxer is often not genuinely seekable until well after that hook runs
+  /// — the manifest parses fast, but mpv can still snap back to 0 once real
+  /// playback catches up. Poll for a few seconds and force a seek if the
+  /// position never lands near the target.
+  Future<void> _confirmResumePosition(Duration? start, int generation) async {
+    debugPrint('[resume] target=$start');
+    if (start == null) return;
+
+    // Neither `playing` (flips true the instant open() is called, well
+    // before mpv is actually delivering frames) nor a single read of
+    // `buffering` (can reflect a stale snapshot from the previous media) is
+    // a trustworthy one-shot readiness signal. Re-issuing the seek is
+    // harmless — it's a no-op once already on target — so just keep forcing
+    // it until it sticks or we give up.
+    for (var attempt = 0; attempt < 20; attempt++) {
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (!mounted || generation != _loadGeneration) return;
+
+      final position = _player.state.position;
+      debugPrint(
+          '[resume] attempt=$attempt position=$position buffering=${_player.state.buffering}');
+      if ((position - start).abs() <= const Duration(seconds: 5)) {
+        debugPrint('[resume] on target, stopping');
+        return;
+      }
+      await _player.seek(start);
     }
   }
 
@@ -272,7 +290,9 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
     }
 
     // Don't "resume" someone into the last seconds of a title.
-    return start > 5 ? Duration(seconds: start) : null;
+    final result = start > 5 ? Duration(seconds: start) : null;
+    debugPrint('[resume] resolved start=$result (raw start=$start)');
+    return result;
   }
 
   // ── Progress ──────────────────────────────────────────────
