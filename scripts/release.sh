@@ -113,8 +113,23 @@ fi
 server="${server%/}"
 [[ -n "$server" ]] || die "no server URL given."
 
+# -L follows redirects (some deployments front the app with a plain HTTP
+# redirect rather than a reverse proxy — e.g. web/redirect/index.ts, which
+# 302s every unrecognized path to the current tunnel URL). The --post3xx
+# flags stop curl from downgrading our POST/PUT to a GET on that redirect,
+# which is curl's default, browser-compatible behavior.
+CURL=(curl -sS -L --post301 --post302 --post303)
+
+# Require JSON back so a redirect/proxy that swallowed our request (returning
+# an HTML page instead of reaching the API) fails loudly instead of feeding
+# garbage to jq.
+require_json() {
+  jq -e . >/dev/null 2>&1 <<<"$1" || die "$2 — response wasn't JSON, got: $(head -c 200 <<<"$1")"
+}
+
 echo "Checking server..."
-curl -sSf "${server}/health" >/dev/null || die "couldn't reach ${server}/health."
+health_resp="$("${CURL[@]}" -f "${server}/health")" || die "couldn't reach ${server}/health."
+require_json "$health_resp" "health check failed"
 
 token="${STREAMIO_ADMIN_TOKEN:-}"
 if [[ -z "$token" ]]; then
@@ -126,27 +141,28 @@ if [[ -z "$token" ]]; then
     echo
   fi
 
-  login_resp="$(curl -sS -X POST "${server}/api/auth/login" \
+  login_resp="$("${CURL[@]}" -X POST "${server}/api/auth/login" \
     -H "Content-Type: application/json" -H "X-Client: app" \
     -d "$(jq -n --arg e "$email" --arg p "$password" '{email:$e,password:$p}')")"
-  token="$(echo "$login_resp" | jq -r '.access_token // empty')"
-  [[ -n "$token" ]] || die "login failed: $(echo "$login_resp" | jq -r '.error // "unknown error"')"
+  require_json "$login_resp" "login request failed"
+  token="$(jq -r '.access_token // empty' <<<"$login_resp")"
+  [[ -n "$token" ]] || die "login failed: $(jq -r '.error // "unknown error"' <<<"$login_resp")"
 fi
 
 echo "Setting client-version policy (latest=${new_semver})..."
-policy_resp="$(curl -sS -w '\n%{http_code}' -X PUT "${server}/api/settings/client-version" \
+policy_resp="$("${CURL[@]}" -w '\n%{http_code}' -X PUT "${server}/api/settings/client-version" \
   -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" \
   -d "$(jq -n --arg l "$new_semver" --arg n "$notes" '{latest: $l, notes: $n}')")"
-policy_code="$(echo "$policy_resp" | tail -1)"
-policy_body="$(echo "$policy_resp" | sed '$d')"
+policy_code="$(tail -1 <<<"$policy_resp")"
+policy_body="$(sed '$d' <<<"$policy_resp")"
 [[ "$policy_code" == "200" ]] || die "failed to set client-version policy (HTTP ${policy_code}): ${policy_body}"
 
 echo "Uploading APK (this can take a while)..."
-upload_resp="$(curl -sS -w '\n%{http_code}' -X POST "${server}/api/settings/client-version/apk" \
+upload_resp="$("${CURL[@]}" -w '\n%{http_code}' -X POST "${server}/api/settings/client-version/apk" \
   -H "Authorization: Bearer ${token}" \
   -F "apk=@${apk_path};type=application/vnd.android.package-archive")"
-upload_code="$(echo "$upload_resp" | tail -1)"
-upload_body="$(echo "$upload_resp" | sed '$d')"
+upload_code="$(tail -1 <<<"$upload_resp")"
+upload_body="$(sed '$d' <<<"$upload_resp")"
 [[ "$upload_code" == "200" ]] || die "APK upload failed (HTTP ${upload_code}): ${upload_body}"
 
 echo
