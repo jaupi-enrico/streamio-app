@@ -1,4 +1,5 @@
 export 'admin_settings.dart';
+export 'app_update_info.dart';
 export 'category.dart';
 export 'episode.dart';
 export 'genre.dart';

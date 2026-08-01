@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 
 import '../../shared/user_facing_error.dart';
+import '../app_version.dart';
 import 'token_store.dart';
 
 /// Raised when a request needs a session and there isn't a usable one left
@@ -30,6 +31,34 @@ enum _RefreshOutcome {
 
   /// The server rejected the refresh token, or there was none. Signed out.
   dead,
+}
+
+/// Raised when the server refuses this build as too old (HTTP 426), which it
+/// does once an admin turns enforcement on for a `minSupported` above this
+/// version. Unlike [SessionExpiredException] this is not about the session —
+/// signing in again changes nothing, only installing a newer build does — so
+/// it must never be treated as an auth failure that clears stored tokens.
+///
+/// It can arrive on *any* request at *any* time, not just at launch: the floor
+/// is raised server-side while the app is running.
+class ClientOutdatedException implements Exception, UserFacingError {
+  const ClientOutdatedException({
+    required this.message,
+    this.minSupported,
+    this.latest,
+    this.downloadUrl,
+    this.notes,
+  });
+
+  @override
+  final String message;
+  final String? minSupported;
+  final String? latest;
+  final String? downloadUrl;
+  final String? notes;
+
+  @override
+  String toString() => message;
 }
 
 /// A failed API call, carrying the server's own `{ error: "..." }` message so
@@ -68,6 +97,10 @@ class ApiClient {
         ..._dio.options.headers,
         // Opts this client into the native-token flow on the backend.
         'X-Client': 'app',
+        // Lets the server decide whether this build is current, so the app
+        // never re-implements the comparison. Omitted if the version couldn't
+        // be read — the server then treats it as older than any floor.
+        if (AppVersion.current != null) 'X-Client-Version': AppVersion.current!,
       },
       // Non-2xx is handled explicitly below so the server's error body is
       // still available to read.
@@ -89,11 +122,17 @@ class ApiClient {
 
   Future<_RefreshOutcome>? _refreshInFlight;
   final _authLost = StreamController<void>.broadcast();
+  final _clientOutdated = StreamController<ClientOutdatedException>.broadcast();
 
   String get baseUrl => _baseUrl;
 
   /// Emits when the session is gone and the user has to log in again.
   Stream<void> get onAuthLost => _authLost.stream;
+
+  /// Emits when the server rejects this build as too old. Surfaced app-wide
+  /// (rather than left to each caller) because the answer is the same
+  /// everywhere: nothing will work again until the user installs a new build.
+  Stream<ClientOutdatedException> get onClientOutdated => _clientOutdated.stream;
 
   /// Renews the access token outside the request path, for the one caller
   /// that can't go through it: the watch-party WebSocket, which carries the
@@ -108,6 +147,7 @@ class ApiClient {
 
   void dispose() {
     _authLost.close();
+    _clientOutdated.close();
     _dio.close(force: true);
   }
 
@@ -396,7 +436,34 @@ class ApiClient {
       return data as T;
     }
 
+    if (status == 426) {
+      final outdated = _outdatedFrom(data);
+      _clientOutdated.add(outdated);
+      throw outdated;
+    }
+
     throw ApiException(_errorMessage(data, status, response), statusCode: status);
+  }
+
+  /// Builds the exception from the `client` payload the 426 carries, so the
+  /// blocking screen can name the version and link the download.
+  ClientOutdatedException _outdatedFrom(dynamic data) {
+    final map = data is Map ? data.cast<String, dynamic>() : const <String, dynamic>{};
+    final client = (map['client'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+    String? str(Object? value) {
+      final text = value?.toString().trim();
+      return (text == null || text.isEmpty) ? null : text;
+    }
+
+    return ClientOutdatedException(
+      message: str(map['message']) ??
+          'This version of the app is no longer supported. Please update to continue.',
+      minSupported: str(client['minSupported']),
+      latest: str(client['latest']),
+      downloadUrl: str(client['downloadUrl']),
+      notes: str(client['notes']),
+    );
   }
 
   String _errorMessage(dynamic data, int status, Response<dynamic> response) {
