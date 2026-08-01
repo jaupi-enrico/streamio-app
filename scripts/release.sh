@@ -82,8 +82,8 @@ flutter build apk --release
 apk_path="build/app/outputs/flutter-apk/app-release.apk"
 [[ -f "$apk_path" ]] || die "build finished but ${apk_path} is missing."
 
-baked_version="$(unzip -p "$apk_path" AndroidManifest.xml | strings | grep -A1 versionName | tail -1 | tr -dc '0-9.')"
-echo "APK built. versionName baked in: ${baked_version:-<unknown>}"
+baked_version="$(unzip -p "$apk_path" AndroidManifest.xml 2>/dev/null | strings | grep -A1 versionName | tail -1 | tr -dc '0-9.' || true)"
+echo "APK built. versionName baked in: ${baked_version:-<unknown - binary manifest did not match, harmless>}"
 
 # ── Commit & push ─────────────────────────────────────────────
 git add pubspec.yaml
