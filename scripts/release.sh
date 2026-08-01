@@ -2,7 +2,7 @@
 # Interactive release cutter for the Flutter client: bumps pubspec.yaml's
 # version, builds the release APK, commits/pushes, then uploads the build
 # straight to a Streamio server and updates its client-version policy — the
-# steps documented by hand in RELEASING.md.
+# steps documented by hand in docs/releasing.md.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 

@@ -1,7 +1,7 @@
 # Cutting a new app release
 
 How to ship a new version of the Flutter client, and how to tell the server about it so
-existing installs actually find out. Mirrors the server's own version story (`../web/CLAUDE.md`
+existing installs actually find out. Mirrors the server's own version story (`../../web/CLAUDE.md`
 → "Versioning and updates"), but the app has no git tag to key off of — `pubspec.yaml` is the
 single source of truth, and the server's admin-configured policy is what makes an update visible
 to users.

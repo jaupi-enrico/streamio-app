@@ -36,7 +36,7 @@ cannot see.
 
 Cutting a release (bump `pubspec.yaml`, build the release APK, upload it to a server and set its
 client-version policy) is `./scripts/release.sh` — interactive, asks for major/minor/patch and a
-description, and confirms before pushing the commit or uploading anything. See `RELEASING.md` for
+description, and confirms before pushing the commit or uploading anything. See `docs/releasing.md` for
 the manual steps it wraps and for release-signing caveats.
 
 ## Architecture
