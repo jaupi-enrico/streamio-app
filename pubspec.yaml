@@ -82,6 +82,10 @@ dev_dependencies:
   drift_dev: ^2.21.0
   flutter_launcher_icons: ^0.14.4
 
+  # The in-memory FlutterSecureStoragePlatform fake used in widget_test.dart —
+  # the real plugin blocks indefinitely on a desktop test VM.
+  flutter_secure_storage_platform_interface: ^1.1.2
+
 flutter:
   uses-material-design: true
   assets:
