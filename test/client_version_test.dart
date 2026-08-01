@@ -136,7 +136,7 @@ void main() {
   }
 
   group('X-Client-Version', () {
-    tearDown(() => AppVersion.debugCurrent = null);
+    tearDown(AppVersion.debugReset);
 
     test('is sent on every request when the version is known', () async {
       AppVersion.debugCurrent = '1.0.0';
@@ -211,7 +211,7 @@ void main() {
   });
 
   group('426 handling', () {
-    tearDown(() => AppVersion.debugCurrent = null);
+    tearDown(AppVersion.debugReset);
 
     test('throws ClientOutdatedException carrying the download details', () async {
       final adapter = _ScriptedAdapter((_) => _json(_blockedBody, 426));

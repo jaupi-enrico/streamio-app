@@ -8,9 +8,9 @@ import 'core/app_version.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
-  // Awaited before the first widget builds: ApiClient stamps
-  // X-Client-Version from a synchronous constructor, so the version has to be
-  // known before anything can create one.
+  // Awaited before the first widget builds: ApiClient stamps X-Client-Version
+  // from a synchronous constructor, so the version must be known before
+  // anything can construct one.
   await AppVersion.load();
   runApp(const ProviderScope(child: StreamioApp()));
 }

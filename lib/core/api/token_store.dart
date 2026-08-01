@@ -1,3 +1,5 @@
+import 'dart:developer' as developer;
+
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 /// Access + refresh tokens, in the platform keystore/keychain.
@@ -28,8 +30,15 @@ class TokenStore {
 
   Future<void> _ensureLoaded() async {
     if (_loaded) return;
-    _access = await _storage.read(key: _accessKey);
-    _refresh = await _storage.read(key: _refreshKey);
+    try {
+      _access = await _storage.read(key: _accessKey);
+      _refresh = await _storage.read(key: _refreshKey);
+    } catch (err, stack) {
+      // A keystore read failure (corrupt/undecryptable entry, plugin error)
+      // otherwise looks identical to "never logged in" to every caller here.
+      developer.log('keystore read failed', name: 'auth', error: err, stackTrace: stack);
+      rethrow;
+    }
     _loaded = true;
   }
 

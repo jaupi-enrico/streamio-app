@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -178,11 +180,25 @@ final appRouterProvider = Provider<GoRouter>((ref) {
 /// Bridges the two Riverpod values the redirect reads into a [Listenable]
 /// GoRouter can subscribe to, so logging in/out or changing servers
 /// re-evaluates the guards immediately.
+///
+/// The notify is deferred to a microtask rather than fired inline from
+/// `ref.listen`. `authProvider` changing is what wakes this up, but the
+/// redirect below reads *derived* providers (`authBootstrappedProvider`,
+/// `isSignedInProvider`), not `authProvider` itself — and calling
+/// `notifyListeners()` synchronously re-enters GoRouter's redirect from
+/// inside `authProvider`'s own notification pass, before those derived
+/// providers have recomputed against the new state. That race let a restore
+/// that just succeeded read back `isSignedInProvider == false`, GoRouter
+/// would settle on /login, and — with no further state change left to fire a
+/// second notify — it never got a second chance to leave. Posting to a
+/// microtask runs the redirect after Riverpod's notification pass (and
+/// everything it recomputes) has finished.
 class _RouterRefresh extends ChangeNotifier {
   _RouterRefresh(Ref ref) {
+    void scheduleNotify() => scheduleMicrotask(notifyListeners);
     _subscriptions = [
-      ref.listen(serverBaseUrlProvider, (_, __) => notifyListeners()),
-      ref.listen(authProvider, (_, __) => notifyListeners()),
+      ref.listen(serverBaseUrlProvider, (_, __) => scheduleNotify()),
+      ref.listen(authProvider, (_, __) => scheduleNotify()),
     ];
   }
 

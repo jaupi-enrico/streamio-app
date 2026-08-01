@@ -1,7 +1,7 @@
 name: streamio
 description: Streamio
 publish_to: "none"
-version: 1.0.0+1
+version: 1.1.0+2
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -57,12 +57,13 @@ dependencies:
   # Share sheet for watch-party invite links
   share_plus: ^10.1.2
 
-  # This build's own version, reported to the server as X-Client-Version and
-  # compared against GET /api/version's policy
-  package_info_plus: ^8.1.1
-
   # Opens the download URL when the server says this build is out of date
   url_launcher: ^6.3.1
+
+  # This build's own version, reported as X-Client-Version. Already in the tree
+  # transitively (media_kit_video -> wakelock_plus -> package_info_plus), so
+  # naming it here adds no native plugin — it just makes the dependency honest.
+  package_info_plus: ^8.1.1
 
   # Chromecast sender (uses the deployment's own receiver id)
   flutter_chrome_cast: ^1.4.6

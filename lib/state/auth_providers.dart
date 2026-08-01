@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:developer' as developer;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -43,15 +44,21 @@ class AuthNotifier extends StateNotifier<AsyncValue<AppUser?>> {
     }
 
     try {
-      if (!await client.tokens.hasSession) return null;
+      if (!await client.tokens.hasSession) {
+        developer.log('restore: no session in the keystore', name: 'auth');
+        return null;
+      }
       return await _fetchUser();
     } on SessionExpiredException {
+      developer.log('restore: session rejected (refresh dead)', name: 'auth');
       return null;
-    } catch (_) {
+    } catch (err, stack) {
       // Offline or the server is down. The tokens are still there and nothing
       // said they were rejected, so fall back to the last profile we saw
       // rather than locking the user out of their downloads over a blip.
       // Screens that need a fresh user retry via [refresh].
+      developer.log('restore: /me failed, falling back to cached user',
+          name: 'auth', error: err, stackTrace: stack);
       return _cachedUser(client);
     }
   }
