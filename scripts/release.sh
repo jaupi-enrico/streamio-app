@@ -141,8 +141,11 @@ if [[ -z "$token" ]]; then
     echo
   fi
 
+  # X-Client-Version matters here: /api/auth/login is not exempt from the
+  # client-version gate (auth/clientVersion.ts), and a request with no
+  # version header at all is treated as older than any configured floor.
   login_resp="$("${CURL[@]}" -X POST "${server}/api/auth/login" \
-    -H "Content-Type: application/json" -H "X-Client: app" \
+    -H "Content-Type: application/json" -H "X-Client: app" -H "X-Client-Version: ${new_semver}" \
     -d "$(jq -n --arg e "$email" --arg p "$password" '{email:$e,password:$p}')")"
   require_json "$login_resp" "login request failed"
   token="$(jq -r '.access_token // empty' <<<"$login_resp")"
