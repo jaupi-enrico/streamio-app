@@ -96,10 +96,17 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
   bool _playing = false;
-  bool _seekedToStart = false;
+  bool _scrubbing = false;
 
   Timer? _progressTimer;
   int _lastSavedSeconds = -1;
+
+  /// The resume point handed to [Media.start]. mpv applies that via an
+  /// `on_load` hook, but for network HLS the demuxer often isn't seekable
+  /// until the stream is actually open, so the hook's seek can silently lose
+  /// to mpv landing back at 0 once real playback begins. Re-asserted once
+  /// (below) as soon as a real duration confirms the stream is up.
+  Duration? _pendingResumeStart;
 
   bool get _isOffline => widget.downloadId != null;
   String get _contentType => widget.contentType ?? 'episode';
@@ -119,12 +126,22 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
   void _wirePlayerStreams() {
     _subscriptions.addAll([
       _player.stream.position.listen((position) {
-        if (!mounted) return;
+        if (!mounted || _scrubbing) return;
         setState(() => _position = position);
       }),
       _player.stream.duration.listen((duration) {
         if (!mounted) return;
         setState(() => _duration = duration);
+
+        final pending = _pendingResumeStart;
+        if (pending != null && duration > Duration.zero) {
+          _pendingResumeStart = null;
+          // mpv's own resume landed near 0 despite Media.start — force it.
+          if ((_player.state.position - pending).abs() >
+              const Duration(seconds: 5)) {
+            _player.seek(pending);
+          }
+        }
       }),
       _player.stream.playing.listen((playing) {
         if (!mounted) return;
@@ -172,12 +189,13 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
     });
 
     try {
+      final start = await _resolveStartPosition();
+      _pendingResumeStart = start;
       final media = _isOffline
-          ? await _offlineMedia()
-          : await _onlineMedia(serverIndex: serverIndex ?? _serverIndex);
+          ? await _offlineMedia(start: start)
+          : await _onlineMedia(serverIndex: serverIndex ?? _serverIndex, start: start);
 
       await _player.open(media);
-      await _applyStartPosition();
       if (mounted) setState(() => _loading = false);
       _startProgressTimer();
     } catch (err) {
@@ -190,12 +208,12 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
     }
   }
 
-  Future<Media> _offlineMedia() async {
+  Future<Media> _offlineMedia({Duration? start}) async {
     final url = await ref.read(localMediaServerProvider).serve(widget.downloadId!);
-    return Media(url);
+    return Media(url, start: start);
   }
 
-  Future<Media> _onlineMedia({required int serverIndex}) async {
+  Future<Media> _onlineMedia({required int serverIndex, Duration? start}) async {
     final result = await resolvePlayback(
       ref.read(contentApiProvider),
       widget.provider,
@@ -226,15 +244,16 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
       if (baseUrl != null) uri = proxiedSourceUrl(uri, baseUrl);
     }
 
-    return Media(uri, httpHeaders: source.headers);
+    return Media(uri, httpHeaders: source.headers, start: start);
   }
 
   /// Resume point: the `t=` the caller passed (from Continue Watching or a
   /// download), otherwise whatever the server has stored.
-  Future<void> _applyStartPosition() async {
-    if (_seekedToStart) return;
-    _seekedToStart = true;
-
+  ///
+  /// Resolved before `_player.open()` so it can be passed as [Media.start] —
+  /// a post-open `Player.seek()` races mpv opening the HLS source and is
+  /// often dropped, which looked like the stream "starting over".
+  Future<Duration?> _resolveStartPosition() async {
     var start = widget.startSeconds ?? 0;
 
     if (start == 0 && !_isOffline && ref.read(isSignedInProvider)) {
@@ -253,7 +272,7 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
     }
 
     // Don't "resume" someone into the last seconds of a title.
-    if (start > 5) await _player.seek(Duration(seconds: start));
+    return start > 5 ? Duration(seconds: start) : null;
   }
 
   // ── Progress ──────────────────────────────────────────────
@@ -332,7 +351,6 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
     );
 
     if (picked == null || picked == _serverIndex) return;
-    _seekedToStart = false;
     await _load(serverIndex: picked);
   }
 
@@ -510,10 +528,7 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
             child: _error != null
                 ? ErrorState(
                     error: _error!,
-                    onRetry: () {
-                      _seekedToStart = false;
-                      _load();
-                    },
+                    onRetry: _load,
                     scrollable: false,
                   )
                 : _loading
@@ -628,13 +643,18 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
                     child: Slider(
                       value: maxMs > 0 ? valueMs : 0,
                       max: maxMs > 0 ? maxMs : 1,
+                      onChangeStart: maxMs > 0
+                          ? (_) => setState(() => _scrubbing = true)
+                          : null,
                       onChanged: maxMs > 0
                           ? (value) => setState(() =>
                               _position = Duration(milliseconds: value.round()))
                           : null,
                       onChangeEnd: maxMs > 0
-                          ? (value) =>
-                              _player.seek(Duration(milliseconds: value.round()))
+                          ? (value) {
+                              _player.seek(Duration(milliseconds: value.round()));
+                              setState(() => _scrubbing = false);
+                            }
                           : null,
                     ),
                   ),

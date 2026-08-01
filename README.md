@@ -35,6 +35,13 @@ Two things on the **server** side have to agree with that prefix when you mount 
   (`${APP_URL}/api/cast-proxy?url=`), and the Chromecast receiver has no page origin to resolve a
   relative URL against — get this wrong and the master manifest loads while every segment 404s.
 
+## Releasing
+
+`scripts/release.sh` cuts a new build end to end: bumps `pubspec.yaml`, runs `analyze`/`test`,
+builds the release APK, commits/pushes, then uploads the APK to a running Streamio server and
+sets its client-version policy. See [RELEASING.md](RELEASING.md) for the manual steps it wraps
+and the details (signing caveats, minimum-supported-version caution, etc.).
+
 ## Branding
 
 The launcher icon is the website's own mark, copied from

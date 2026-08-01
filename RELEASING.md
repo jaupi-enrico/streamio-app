@@ -6,11 +6,34 @@ existing installs actually find out. Mirrors the server's own version story (`..
 single source of truth, and the server's admin-configured policy is what makes an update visible
 to users.
 
-Current setup: builds are shared manually (no Play Store, no app-hosted download server yet), and
-the release build signs with the **debug keystore** — a placeholder in
-`android/app/build.gradle` (`signingConfig = signingConfigs.getByName("debug")`). Fine for
-sideloading to people you know; revisit before this goes any wider (see "Real release signing"
-at the bottom).
+Current setup: no Play Store — the server hosts the APK itself (uploaded through the admin UI,
+step 4) and the app downloads updates straight from it. The release build signs with the
+**debug keystore** — a placeholder in `android/app/build.gradle`
+(`signingConfig = signingConfigs.getByName("debug")`). Fine for sideloading to people you know;
+revisit before this goes any wider (see "Real release signing" at the bottom).
+
+## The easy way
+
+```bash
+./scripts/release.sh
+```
+
+Does steps 1–4 below interactively: checks the tree is clean and in sync with `origin`, prompts
+for major/minor/patch and a description, bumps `pubspec.yaml` (semver **and** build number),
+runs `flutter pub get`/`analyze`/`test`, builds the release APK, commits (`Release X.Y.Z+N`) and
+pushes, then — after asking — logs into a server as an admin (`STREAMIO_ADMIN_TOKEN`, or
+`STREAMIO_ADMIN_EMAIL`/`STREAMIO_ADMIN_PASSWORD`, or an interactive prompt), sets `latest` and
+`notes` on `/api/settings/client-version`, and uploads the APK to
+`/api/settings/client-version/apk`. `STREAMIO_SERVER_URL` skips the server-URL prompt.
+
+It deliberately sets `latest` **before** uploading the APK — the upload handler stamps
+`apkVersion` from whatever `latest` currently is, so doing it in that order is what makes
+`apkVersion` land on the build you just shipped instead of the previous one. It never touches
+`minSupported`/`enforce` — raise those by hand once the new build is confirmed working (see
+step 4).
+
+Everything below is what the script automates, useful if you want to do a step by hand or the
+script can't reach your server.
 
 ## 1. Bump the version
 
@@ -53,35 +76,46 @@ Sanity-check the version actually baked in before handing it out:
 unzip -p build/app/outputs/flutter-apk/app-release.apk AndroidManifest.xml | strings | grep -A1 versionName
 ```
 
-## 3. Get it to people
-
-However you're distributing it today (manual share). Two things depend on where it ends up:
-
-- **The download link** — wherever you put the APK (a chat, a file share, your own server),
-  that URL is what you'll paste into "Download URL" in step 4. Without it, the in-app "update
-  available" prompt has nowhere to send someone.
-- **Enforcement** (optional) — if you ever raise "Minimum supported" and turn enforcement on, the
-  server starts rejecting requests from older builds with 426 (`auth/clientVersion.ts`). Doing
-  that before the new build is actually reachable locks people out with nowhere to go — only
-  raise `minSupported` once the new build is live at `downloadUrl`.
-
-## 4. Tell the server about it
-
-This is the step that actually makes anyone see "update available" — bumping `pubspec.yaml`
-alone changes nothing for installed apps, since they only find out by asking the server.
+## 3. Upload it to the server
 
 In the account page, **Admin tab → App Version Policy** (`web/public/account.html`,
-admin-only — gated by `ADMIN_EMAILS`):
+admin-only — gated by `ADMIN_EMAILS`), under "Host the build on this server": pick
+`app-release.apk` from step 2 and hit **Upload APK**.
+
+That does two things:
+
+- stores the file on the server (`GET /api/version/download` — public/unauthenticated, so even a
+  build already blocked by "Block outdated apps" below can still reach it and escape),
+- fills in the **Download URL** field above with that server's own download link, replacing
+  whatever was there before.
+
+The upload only replaces the *file* — it doesn't touch `latest`/`minSupported`/`notes`/
+`enforce`, and doesn't save the form by itself. Still need to fill those in and hit **Save**
+(next step) for any of it to take effect.
+
+If you'd rather point at an external link (GitHub release, etc.) instead of hosting it here, just
+type over the Download URL field by hand after uploading, or skip the upload entirely — it's a
+plain editable field either way. Editing it away from the server's own link doesn't delete the
+uploaded file, it just stops the server from serving it.
+
+## 4. Set the version policy and save
+
+Same card, the rest of the fields:
 
 | Field | What to put |
 |---|---|
 | Latest app version | The semver you just set, e.g. `1.1.0` (no build number) |
 | Minimum supported | Leave alone unless you want older builds blocked, not just nudged |
-| Download URL | Wherever step 3 put the APK |
+| Download URL | Auto-filled by step 3, or paste an external link instead |
 | Message | Optional — shown in the update prompt ("what's new") |
 | Block outdated apps | Off = suggest only. On = 426s anything below "Minimum supported" |
 
-Same thing via API if you'd rather script it (admin JWT required):
+Then hit **Save**. Raising "Minimum supported" and turning enforcement on rejects every older
+build immediately (`auth/clientVersion.ts`) — only do that once the new build is actually
+reachable at Download URL, i.e. after step 3's upload has landed (or an external link is live).
+
+Same thing via API if you'd rather script the policy fields (the upload itself needs a real
+multipart POST, not shown here — admin JWT required either way):
 
 ```bash
 curl -X PUT https://your-server/api/settings/client-version \
@@ -90,7 +124,6 @@ curl -X PUT https://your-server/api/settings/client-version \
   -d '{
     "latest": "1.1.0",
     "min_supported": "",
-    "download_url": "https://example.com/streamio-1.1.0.apk",
     "notes": "Fixes sessions getting dropped on app close.",
     "enforce": false
   }'
@@ -105,9 +138,9 @@ listener for a 426 that can arrive on any request — see `updateCheckProvider` 
 - [ ] `pubspec.yaml` version bumped (semver **and** build number)
 - [ ] `flutter analyze` / `flutter test` clean
 - [ ] `flutter build apk --release` built and version-checked
-- [ ] APK distributed, download link in hand
-- [ ] Admin → App Version Policy updated on the server (`latest` at minimum)
-- [ ] Only flip "Block outdated apps" on / raise "Minimum supported" once the link above is live
+- [ ] APK uploaded via Admin → App Version Policy (or an external link pasted into Download URL)
+- [ ] `latest` (and `notes`, if any) set and saved
+- [ ] Only flip "Block outdated apps" on / raise "Minimum supported" once the build above is live
 
 ## Real release signing (later, not blocking)
 

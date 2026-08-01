@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:dio/dio.dart';
 
@@ -429,11 +430,32 @@ class ApiClient {
 
   T _unwrap<T>(Response<dynamic> response) {
     final status = response.statusCode ?? 0;
-    final data = response.data;
+    var data = response.data;
 
     if (status >= 200 && status < 300) {
       if (T == Null || data == null) return null as T;
-      return data as T;
+      // A redirect hop or a proxy in front of the install can hand back a
+      // 2xx whose body Dio didn't auto-decode as JSON — a missing/wrong
+      // Content-Type is enough to make its transformer give up and return
+      // the raw text. Decode it ourselves rather than crash the isolate on
+      // an unhandled cast failure.
+      if (data is String && data is! T) {
+        try {
+          data = jsonDecode(data);
+        } on FormatException {
+          throw ApiException(
+            'Unexpected response from the server (not JSON).',
+            statusCode: status,
+          );
+        }
+      }
+      if (data is! T) {
+        throw ApiException(
+          'Unexpected response from the server.',
+          statusCode: status,
+        );
+      }
+      return data;
     }
 
     if (status == 426) {

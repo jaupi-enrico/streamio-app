@@ -34,6 +34,11 @@ riverpod_generator, so don't reintroduce annotations expecting them to work.
 after dependency or platform-config changes — it catches plugin and manifest breakage the analyzer
 cannot see.
 
+Cutting a release (bump `pubspec.yaml`, build the release APK, upload it to a server and set its
+client-version policy) is `./scripts/release.sh` — interactive, asks for major/minor/patch and a
+description, and confirms before pushing the commit or uploading anything. See `RELEASING.md` for
+the manual steps it wraps and for release-signing caveats.
+
 ## Architecture
 
 The app is a thin client: it does **not** scrape. An earlier iteration ported the backend's engine

@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# Interactive release cutter for the Flutter client: bumps pubspec.yaml's
+# version, builds the release APK, commits/pushes, then uploads the build
+# straight to a Streamio server and updates its client-version policy — the
+# steps documented by hand in RELEASING.md.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; BOLD=$'\033[1m'; RESET=$'\033[0m'
+die() { echo "${RED}error:${RESET} $*" >&2; exit 1; }
+
+for bin in flutter jq curl git; do
+  command -v "$bin" >/dev/null 2>&1 || die "'$bin' is required but not found in PATH."
+done
+
+[[ -z "$(git status --porcelain)" ]] || die "working tree is dirty — commit or stash your changes first."
+
+branch="$(git branch --show-current)"
+if [[ "$branch" != "main" && "$branch" != "master" ]]; then
+  echo "${YELLOW}warning:${RESET} you are on '${branch}', not 'main'/'master'."
+  read -r -p "Continue anyway? [y/N] " confirm_branch
+  [[ "$confirm_branch" =~ ^[Yy]$ ]] || die "aborted."
+fi
+
+echo "Fetching latest from origin..."
+git fetch origin --quiet
+local_head="$(git rev-parse HEAD)"
+remote_head="$(git rev-parse "origin/$branch" 2>/dev/null || echo "")"
+[[ "$local_head" == "$remote_head" ]] || die "local '$branch' is not in sync with 'origin/$branch' — pull/push first."
+
+# ── Version bump ───────────────────────────────────────────────
+current_version="$(grep -m1 '^version:' pubspec.yaml | sed 's/^version:[[:space:]]*//')"
+[[ -n "$current_version" ]] || die "couldn't find a 'version:' line in pubspec.yaml."
+current_semver="${current_version%%+*}"
+current_build="${current_version##*+}"
+[[ "$current_build" =~ ^[0-9]+$ ]] || die "pubspec.yaml version '${current_version}' has no numeric build suffix (expected X.Y.Z+N)."
+
+echo "Current version: ${BOLD}${current_version}${RESET}"
+echo
+echo "What kind of release is this?"
+IFS='.' read -r major minor patch <<< "$current_semver"
+select bump in "major" "minor" "patch (fix)"; do
+  case "$REPLY" in
+    1) major=$((major + 1)); minor=0; patch=0; break ;;
+    2) minor=$((minor + 1)); patch=0; break ;;
+    3) patch=$((patch + 1)); break ;;
+    *) echo "Pick 1, 2, or 3." ;;
+  esac
+done
+new_semver="${major}.${minor}.${patch}"
+new_build=$((current_build + 1))
+new_version="${new_semver}+${new_build}"
+
+echo
+echo "Enter a description of this release (used as the commit message and the"
+echo "server's client-version 'notes' / update prompt). Finish with an empty line:"
+notes=""
+while IFS= read -r line; do
+  [[ -z "$line" ]] && break
+  notes+="${line}"$'\n'
+done
+notes="$(printf '%s' "$notes" | sed -e '$a\')"
+[[ -n "$(printf '%s' "$notes" | tr -d '[:space:]')" ]] || die "a description is required."
+
+echo
+echo "${BOLD}About to release:${RESET}"
+echo "  ${current_version} -> ${new_version}"
+echo "  branch: ${branch}"
+echo "  notes:"
+printf '%s\n' "$notes" | sed 's/^/    /'
+read -r -p "Bump version and build the APK? [y/N] " confirm_build
+[[ "$confirm_build" =~ ^[Yy]$ ]] || die "aborted."
+
+sed -i "s/^version:.*/version: ${new_version}/" pubspec.yaml
+
+# ── Build ─────────────────────────────────────────────────────
+flutter pub get
+flutter analyze
+flutter test
+flutter build apk --release
+
+apk_path="build/app/outputs/flutter-apk/app-release.apk"
+[[ -f "$apk_path" ]] || die "build finished but ${apk_path} is missing."
+
+baked_version="$(unzip -p "$apk_path" AndroidManifest.xml | strings | grep -A1 versionName | tail -1 | tr -dc '0-9.')"
+echo "APK built. versionName baked in: ${baked_version:-<unknown>}"
+
+# ── Commit & push ─────────────────────────────────────────────
+git add pubspec.yaml
+git commit -m "Release ${new_version}" -m "$notes"
+
+echo
+read -r -p "Push commit to origin/${branch}? [y/N] " confirm_push
+if [[ "$confirm_push" =~ ^[Yy]$ ]]; then
+  git push origin "$branch"
+else
+  echo "${YELLOW}Skipped push.${RESET} Commit is local only — run 'git push' when ready."
+fi
+
+# ── Upload to server ────────────────────────────────────────────
+echo
+read -r -p "Upload the APK to a Streamio server now? [y/N] " confirm_upload
+if [[ ! "$confirm_upload" =~ ^[Yy]$ ]]; then
+  echo "Skipping upload. APK is at ${apk_path}."
+  echo "${GREEN}Done.${RESET} Version ${new_version} built and committed."
+  exit 0
+fi
+
+server="${STREAMIO_SERVER_URL:-}"
+if [[ -z "$server" ]]; then
+  read -r -p "Server URL (e.g. https://streamio.example.com): " server
+fi
+server="${server%/}"
+[[ -n "$server" ]] || die "no server URL given."
+
+echo "Checking server..."
+curl -sSf "${server}/health" >/dev/null || die "couldn't reach ${server}/health."
+
+token="${STREAMIO_ADMIN_TOKEN:-}"
+if [[ -z "$token" ]]; then
+  email="${STREAMIO_ADMIN_EMAIL:-}"
+  [[ -n "$email" ]] || read -r -p "Admin email: " email
+  password="${STREAMIO_ADMIN_PASSWORD:-}"
+  if [[ -z "$password" ]]; then
+    read -r -s -p "Admin password: " password
+    echo
+  fi
+
+  login_resp="$(curl -sS -X POST "${server}/api/auth/login" \
+    -H "Content-Type: application/json" -H "X-Client: app" \
+    -d "$(jq -n --arg e "$email" --arg p "$password" '{email:$e,password:$p}')")"
+  token="$(echo "$login_resp" | jq -r '.access_token // empty')"
+  [[ -n "$token" ]] || die "login failed: $(echo "$login_resp" | jq -r '.error // "unknown error"')"
+fi
+
+echo "Setting client-version policy (latest=${new_semver})..."
+policy_resp="$(curl -sS -w '\n%{http_code}' -X PUT "${server}/api/settings/client-version" \
+  -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" \
+  -d "$(jq -n --arg l "$new_semver" --arg n "$notes" '{latest: $l, notes: $n}')")"
+policy_code="$(echo "$policy_resp" | tail -1)"
+policy_body="$(echo "$policy_resp" | sed '$d')"
+[[ "$policy_code" == "200" ]] || die "failed to set client-version policy (HTTP ${policy_code}): ${policy_body}"
+
+echo "Uploading APK (this can take a while)..."
+upload_resp="$(curl -sS -w '\n%{http_code}' -X POST "${server}/api/settings/client-version/apk" \
+  -H "Authorization: Bearer ${token}" \
+  -F "apk=@${apk_path};type=application/vnd.android.package-archive")"
+upload_code="$(echo "$upload_resp" | tail -1)"
+upload_body="$(echo "$upload_resp" | sed '$d')"
+[[ "$upload_code" == "200" ]] || die "APK upload failed (HTTP ${upload_code}): ${upload_body}"
+
+echo
+echo "${GREEN}Released ${new_version} and uploaded to ${server}.${RESET}"
+echo "Minimum supported version and enforcement were left untouched — raise those"
+echo "separately (Admin -> App Version Policy) once the build is confirmed working."
