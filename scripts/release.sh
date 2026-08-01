@@ -115,10 +115,13 @@ server="${server%/}"
 
 # -L follows redirects (some deployments front the app with a plain HTTP
 # redirect rather than a reverse proxy — e.g. web/redirect/index.ts, which
-# 302s every unrecognized path to the current tunnel URL). The --post3xx
-# flags stop curl from downgrading our POST/PUT to a GET on that redirect,
-# which is curl's default, browser-compatible behavior.
-CURL=(curl -sS -L --post301 --post302 --post303)
+# 302s every unrecognized path to the current tunnel URL, typically on a
+# different host). The --post3xx flags stop curl from downgrading our
+# POST/PUT to a GET on that redirect, which is curl's default,
+# browser-compatible behavior. --location-trusted keeps the Authorization
+# header across that cross-host hop — curl drops it by default for safety,
+# but here the redirect target is this same deployment's own tunnel.
+CURL=(curl -sS -L --post301 --post302 --post303 --location-trusted)
 
 # Require JSON back so a redirect/proxy that swallowed our request (returning
 # an HTML page instead of reaching the API) fails loudly instead of feeding
