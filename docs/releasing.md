@@ -21,10 +21,35 @@ revisit before this goes any wider (see "Real release signing" at the bottom).
 Does steps 1–4 below interactively: checks the tree is clean and in sync with `origin`, prompts
 for major/minor/patch and a description, bumps `pubspec.yaml` (semver **and** build number),
 runs `flutter pub get`/`analyze`/`test`, builds the release APK, commits (`Release X.Y.Z+N`) and
-pushes, then — after asking — logs into a server as an admin (`STREAMIO_ADMIN_TOKEN`, or
-`STREAMIO_ADMIN_EMAIL`/`STREAMIO_ADMIN_PASSWORD`, or an interactive prompt), sets `latest` and
-`notes` on `/api/settings/client-version`, and uploads the APK to
-`/api/settings/client-version/apk`. `STREAMIO_SERVER_URL` skips the server-URL prompt.
+pushes, then — after asking — logs into a server as an admin, sets `latest` and `notes` on
+`/api/settings/client-version`, and uploads the APK to `/api/settings/client-version/apk`.
+
+### Server URL and admin credentials
+
+Put them in **`scripts/release.env`** so a release isn't a typing exercise:
+
+```bash
+cp scripts/release.env.example scripts/release.env
+$EDITOR scripts/release.env
+chmod 600 scripts/release.env      # it holds a password
+```
+
+```bash
+STREAMIO_SERVER_URL="https://streamio.example.com"
+STREAMIO_ADMIN_EMAIL="you@example.com"
+STREAMIO_ADMIN_PASSWORD="your-password"
+#STREAMIO_ADMIN_TOKEN=""           # optional; if set, the login is skipped entirely
+```
+
+The file is sourced by the script, so it's plain shell assignments — quote anything containing
+spaces or `#`. It's **gitignored** (`/scripts/release.env`), and the script warns if it ever ends
+up tracked or world-readable. Point `STREAMIO_RELEASE_ENV=/path/to/other.env` at a different file
+to keep credentials for more than one server.
+
+Everything in it is optional; whatever is missing is prompted for (the password with echo off).
+Variables already exported in your environment win over the file, so a one-off
+`STREAMIO_SERVER_URL=https://staging.example.com ./scripts/release.sh` still works. The admin
+account must be listed in the server's `ADMIN_EMAILS`.
 
 It deliberately sets `latest` **before** uploading the APK — the upload handler stamps
 `apkVersion` from whatever `latest` currently is, so doing it in that order is what makes

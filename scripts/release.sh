@@ -13,6 +13,39 @@ for bin in flutter jq curl git; do
   command -v "$bin" >/dev/null 2>&1 || die "'$bin' is required but not found in PATH."
 done
 
+# ── Credentials ────────────────────────────────────────────────
+# scripts/release.env holds the server URL and admin login so a release doesn't
+# have to be typed out every time. It is gitignored (it contains a password);
+# see docs/releasing.md and scripts/release.env.example. Anything already
+# exported in the environment wins over the file, so a one-off
+# `STREAMIO_SERVER_URL=... ./scripts/release.sh` still works.
+env_file="${STREAMIO_RELEASE_ENV:-scripts/release.env}"
+if [[ -f "$env_file" ]]; then
+  pre_url="${STREAMIO_SERVER_URL:-}"
+  pre_email="${STREAMIO_ADMIN_EMAIL:-}"
+  pre_password="${STREAMIO_ADMIN_PASSWORD:-}"
+  pre_token="${STREAMIO_ADMIN_TOKEN:-}"
+
+  set -a
+  # shellcheck disable=SC1090
+  source "$env_file" || die "couldn't read ${env_file}."
+  set +a
+
+  [[ -n "$pre_url" ]] && STREAMIO_SERVER_URL="$pre_url"
+  [[ -n "$pre_email" ]] && STREAMIO_ADMIN_EMAIL="$pre_email"
+  [[ -n "$pre_password" ]] && STREAMIO_ADMIN_PASSWORD="$pre_password"
+  [[ -n "$pre_token" ]] && STREAMIO_ADMIN_TOKEN="$pre_token"
+
+  echo "Loaded release credentials from ${env_file}."
+  env_mode="$(stat -c '%a' "$env_file" 2>/dev/null || stat -f '%Lp' "$env_file" 2>/dev/null || echo "")"
+  if [[ -n "$env_mode" && "${env_mode: -2}" != "00" ]]; then
+    echo "${YELLOW}warning:${RESET} ${env_file} is mode ${env_mode} — group/other can read it; 'chmod 600 ${env_file}'."
+  fi
+  if git ls-files --error-unmatch "$env_file" >/dev/null 2>&1; then
+    echo "${YELLOW}warning:${RESET} ${env_file} is tracked by git — it holds a password; untrack it."
+  fi
+fi
+
 [[ -z "$(git status --porcelain)" ]] || die "working tree is dirty — commit or stash your changes first."
 
 branch="$(git branch --show-current)"
