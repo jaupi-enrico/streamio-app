@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_chrome_cast/entities.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/cast/cast_service.dart';
 import '../../shared/widgets/async_states.dart';
@@ -87,8 +88,20 @@ class _CastSheetState extends ConsumerState<CastSheet> {
               children: [
                 const Icon(Icons.cast),
                 const SizedBox(width: 10),
-                Text('Cast to a device',
-                    style: Theme.of(context).textTheme.titleMedium),
+                Expanded(
+                  child: Text('Cast to a device',
+                      style: Theme.of(context).textTheme.titleMedium),
+                ),
+                // "No devices found" is most often a receiver-id mismatch, so
+                // the place to fix it is one tap from where you notice.
+                IconButton(
+                  tooltip: 'Chromecast settings',
+                  icon: const Icon(Icons.settings_outlined),
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                    context.push('/settings/cast');
+                  },
+                ),
               ],
             ),
             const SizedBox(height: 12),

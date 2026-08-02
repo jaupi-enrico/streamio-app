@@ -130,9 +130,24 @@ The backend half of each is described in `../web/CLAUDE.md`.
 request of an HLS playlist, which these CDNs require, and it handles demuxed audio/video.
 
 Watch parties connect to `wss://…/ws/rooms/:code?token=…` (`lib/core/api/room_socket.dart`) with the
-same reconnect and echo-guard behavior as the web frontend's `room-sync.js`. Chromecast uses the
-deployment's own receiver app id from `GET /api/cast-config`, not a hardcoded one; the Cast button
-hides itself when the platform or the server doesn't support it.
+same reconnect and echo-guard behavior as the web frontend's `room-sync.js`.
+
+Chromecast (`lib/core/cast/cast_service.dart`) resolves its receiver app id rather than hardcoding
+one: a device-local override (Account → Chromecast, `core/config/cast_receiver_config.dart`) beats
+`castReceiverAppId` from `GET /api/cast-config`, which beats Google's default media receiver. The
+override exists because a receiver is registered against a Google Cast console account, not against
+a Streamio install, so the person running the app is not necessarily the person who can change
+`CAST_RECEIVER_APP_ID` on the server. **The platform SDK reads the id once per process**, so a
+changed id needs an app restart — the settings screen says so when it detects that.
+
+Two Cast requirements live outside Dart and fail silently when missing:
+`OPTIONS_PROVIDER_CLASS_NAME` (plus `MediaNotificationService`) in `AndroidManifest.xml`, without
+which `CastContext.getSharedInstance()` throws and the button never appears; and
+`NSLocalNetworkUsageDescription` + `NSBonjourServices` in `Info.plist`, without which iOS 14+
+discovers nothing. The Bonjour list names receiver ids literally, so a custom id other than the two
+listed there needs adding for iOS discovery to see it. The Cast button hides itself when the
+platform doesn't support Cast or the SDK failed to start; a server that can't answer
+`/api/cast-config` no longer disables it.
 
 ## Offline downloads (`lib/core/download/`)
 

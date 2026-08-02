@@ -114,6 +114,11 @@ class _AccountScreenState extends ConsumerState<AccountScreen>
                   onPressed: () => context.push('/admin'),
                 ),
               IconButton(
+                tooltip: 'Chromecast settings',
+                icon: const Icon(Icons.cast_outlined),
+                onPressed: () => context.push('/settings/cast'),
+              ),
+              IconButton(
                 tooltip: 'Change server',
                 icon: const Icon(Icons.dns_outlined),
                 onPressed: () => context.push('/server'),

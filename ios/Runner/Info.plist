@@ -44,6 +44,23 @@
 	</array>
 	<!-- A self-hosted Streamio is frequently reached over plain http on a LAN
 	     or DDNS address, so cleartext to arbitrary hosts has to be allowed. -->
+	<!-- Chromecast discovery is mDNS on the local network, which iOS 14+ gates
+	     behind an explicit prompt: without this string and the Bonjour service
+	     list below the browse silently returns no devices at all.
+
+	     The app-id-scoped service has to be listed literally, and the receiver
+	     id is per-deployment (Settings › Cast receiver in-app), so the ids a
+	     build can discover are fixed here: the default media receiver, and this
+	     project's default custom receiver. Point the app at a different custom
+	     receiver and its id needs adding to this array too. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Streamio uses the local network to find Chromecast devices to play on.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_googlecast._tcp</string>
+		<string>_CC1AD845._googlecast._tcp</string>
+		<string>_BF64D6B2._googlecast._tcp</string>
+	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

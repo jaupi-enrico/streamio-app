@@ -17,6 +17,7 @@ import '../features/home/home_screen.dart';
 import '../features/providers/providers_screen.dart';
 import '../features/rooms/rooms_screen.dart';
 import '../features/search/search_screen.dart';
+import '../features/settings/cast_settings_screen.dart';
 import '../features/setup/server_setup_screen.dart';
 import '../features/watch/watch_screen.dart';
 import '../state/auth_providers.dart';
@@ -146,6 +147,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/providers', builder: (context, state) => const ProvidersScreen()),
       GoRoute(path: '/rooms', builder: (context, state) => const RoomsScreen()),
       GoRoute(path: '/admin', builder: (context, state) => const AdminScreen()),
+      GoRoute(
+        path: '/settings/cast',
+        builder: (context, state) => const CastSettingsScreen(),
+      ),
 
       // ── Tabbed shell ───────────────────────────────────────
       ShellRoute(

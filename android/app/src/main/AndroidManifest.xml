@@ -11,6 +11,11 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
 
+    <!-- Chromecast: the SDK's MediaNotificationService (declared below) is a
+         mediaPlayback foreground service, and Android 14+ refuses to start one
+         without the matching typed permission. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
+
     <application
         android:label="Streamio"
         android:name="${applicationName}"
@@ -58,6 +63,25 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- Chromecast. The Cast SDK reads its CastOptions through an
+             OptionsProvider it instantiates by reflection from this exact
+             meta-data key, and flutter_chrome_cast ships the implementation
+             that hands it the options set from Dart. Without this entry
+             CastContext.getSharedInstance() throws IllegalStateException, the
+             plugin's setSharedInstance fails, CastService.initialize() returns
+             false and the Cast button never appears — which is exactly what
+             "cast doesn't work" looks like from the UI. -->
+        <meta-data
+            android:name="com.google.android.gms.cast.framework.OPTIONS_PROVIDER_CLASS_NAME"
+            android:value="com.felnanuke.google_cast.GoogleCastOptionsProvider" />
+
+        <!-- Lock-screen / notification transport controls for the running cast
+             session. The SDK starts this itself; it only has to be declared. -->
+        <service
+            android:name="com.google.android.gms.cast.framework.media.MediaNotificationService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
