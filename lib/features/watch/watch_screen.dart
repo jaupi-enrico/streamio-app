@@ -101,6 +101,20 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
   Timer? _progressTimer;
   int _lastSavedSeconds = -1;
 
+  /// Guards [_saveProgress] against a stomp: mpv can report a stray near-zero
+  /// position for a moment after `open()` while the resume seek is still
+  /// converging (see [_confirmResumePosition]). Saving during that window
+  /// would overwrite the real resume point with 0. Starts true when there's
+  /// no resume target to wait for.
+  bool _resumeConfirmed = true;
+
+  /// Set once the user (or the watch party) picks a position by hand, so the
+  /// resume retry loop stops forcing them back to the stored one.
+  bool _userSeeked = false;
+
+  bool _controlsVisible = true;
+  Timer? _hideControlsTimer;
+
   /// Bumped on every [_load]. Lets a stray [_confirmResumePosition] from a
   /// superseded load (server switch, retry) recognize it's stale and stop.
   int _loadGeneration = 0;
@@ -118,6 +132,7 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _wirePlayerStreams();
     _load();
+    _resetHideControlsTimer();
   }
 
   void _wirePlayerStreams() {
@@ -132,7 +147,13 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
       }),
       _player.stream.playing.listen((playing) {
         if (!mounted) return;
-        setState(() => _playing = playing);
+        setState(() {
+          _playing = playing;
+          // Nothing to auto-hide while paused — show the controls the user
+          // just asked for by pausing.
+          if (!playing) _controlsVisible = true;
+        });
+        _resetHideControlsTimer();
         // Pausing is the save point users expect to survive a force-quit.
         if (!playing) unawaited(_saveProgress());
       }),
@@ -155,6 +176,7 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
     // worth persisting.
     unawaited(_saveProgress());
     _progressTimer?.cancel();
+    _hideControlsTimer?.cancel();
     for (final subscription in _subscriptions) {
       unawaited(subscription.cancel());
     }
@@ -182,6 +204,8 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
           ? await _offlineMedia(start: start)
           : await _onlineMedia(serverIndex: serverIndex ?? _serverIndex, start: start);
 
+      _resumeConfirmed = start == null;
+      _userSeeked = false;
       await _player.open(media);
       if (mounted) setState(() => _loading = false);
       _startProgressTimer();
@@ -208,21 +232,55 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
     // Neither `playing` (flips true the instant open() is called, well
     // before mpv is actually delivering frames) nor a single read of
     // `buffering` (can reflect a stale snapshot from the previous media) is
-    // a trustworthy one-shot readiness signal. Re-issuing the seek is
-    // harmless — it's a no-op once already on target — so just keep forcing
-    // it until it sticks or we give up.
-    for (var attempt = 0; attempt < 20; attempt++) {
-      await Future.delayed(const Duration(milliseconds: 500));
-      if (!mounted || generation != _loadGeneration) return;
+    // a trustworthy one-shot readiness signal — and neither is one on-target
+    // position reading. Right after open() mpv reports back the `Media.start`
+    // it was handed, which is bookkeeping, not a decoded frame: the position
+    // shows the resume point, then snaps to 0 the moment the first image
+    // actually arrives. Stopping at that first reading is what made the
+    // resume look like it "took, then restarted from 0:00".
+    //
+    // So the resume counts as landed only once the position has held at or
+    // past the target across consecutive samples *while advancing on its
+    // own*, which is something only real playback does. Re-issuing the seek
+    // meanwhile is harmless — a no-op once already on target.
+    //
+    // Until this settles, [_saveProgress] must not trust `_position`: saving
+    // one of those stray near-zero readings would overwrite the real resume
+    // point with 0 (e.g. the user pausing or backing out right after
+    // opening).
+    const tolerance = Duration(seconds: 5);
+    var settled = 0;
+    Duration? previous;
 
-      final position = _player.state.position;
-      debugPrint(
-          '[resume] attempt=$attempt position=$position buffering=${_player.state.buffering}');
-      if ((position - start).abs() <= const Duration(seconds: 5)) {
-        debugPrint('[resume] on target, stopping');
-        return;
+    try {
+      for (var attempt = 0; attempt < 80; attempt++) {
+        await Future.delayed(const Duration(milliseconds: 250));
+        if (!mounted || generation != _loadGeneration) return;
+        // A manual seek means the user has chosen their own position; stop
+        // dragging them back to the stored one.
+        if (_userSeeked) return;
+
+        final position = _player.state.position;
+        final last = previous;
+        final advanced = last != null && position > last;
+        previous = position;
+
+        // Being *past* the target is playback progressing, not a miss.
+        if (position >= start - tolerance) {
+          if (advanced && _player.state.playing) settled++;
+          if (settled >= 3) {
+            debugPrint('[resume] settled at $position');
+            return;
+          }
+          continue;
+        }
+
+        debugPrint('[resume] attempt=$attempt fell back to $position, re-seeking');
+        settled = 0;
+        await _player.seek(start);
       }
-      await _player.seek(start);
+    } finally {
+      if (mounted && generation == _loadGeneration) _resumeConfirmed = true;
     }
   }
 
@@ -295,6 +353,30 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
     return result;
   }
 
+  // ── Controls visibility ──────────────────────────────────
+
+  /// Auto-hides the overlay after inactivity, matching every other video
+  /// player. `Video(controls: NoVideoControls)` opts out of media_kit's own
+  /// chrome (and its built-in auto-hide) so this app's replacement overlay
+  /// has to reimplement it.
+  void _resetHideControlsTimer() {
+    _hideControlsTimer?.cancel();
+    if (!_playing) return; // don't hide while paused; nothing to look at.
+    _hideControlsTimer = Timer(const Duration(seconds: 4), () {
+      if (!mounted) return;
+      setState(() => _controlsVisible = false);
+    });
+  }
+
+  void _toggleControls() {
+    setState(() => _controlsVisible = !_controlsVisible);
+    if (_controlsVisible) {
+      _resetHideControlsTimer();
+    } else {
+      _hideControlsTimer?.cancel();
+    }
+  }
+
   // ── Progress ──────────────────────────────────────────────
 
   void _startProgressTimer() {
@@ -303,6 +385,11 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
   }
 
   Future<void> _saveProgress({bool completed = false}) async {
+    // See _confirmResumePosition: `_position` isn't trustworthy until the
+    // resume seek has landed, and saving early would stomp the real resume
+    // point with a stray near-zero reading.
+    if (!_resumeConfirmed) return;
+
     final seconds = _position.inSeconds;
     if (seconds <= 0) return;
     if (!completed && seconds == _lastSavedSeconds) return;
@@ -520,6 +607,8 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
   Future<void> _applyRemoteState(RoomState state) async {
     final target = Duration(seconds: state.positionSeconds);
     if ((target - _position).abs() > const Duration(seconds: 2)) {
+      // The room's position wins over this device's stored resume point.
+      _userSeeked = true;
       await _player.seek(target);
     }
     if (state.playing != _playing) {
@@ -540,6 +629,8 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final showChrome = _loading || _error != null || _controlsVisible;
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
@@ -553,10 +644,36 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
                   )
                 : _loading
                     ? const Center(child: CircularProgressIndicator())
-                    : Video(controller: _controller, controls: NoVideoControls),
+                    : GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: _toggleControls,
+                        child: Video(controller: _controller, controls: NoVideoControls),
+                      ),
           ),
-          if (!_loading && _error == null) _controlsOverlay(),
-          Positioned(top: 0, left: 0, right: 0, child: _topBar()),
+          if (!_loading && _error == null)
+            // Positioned.fill: a bare Stack whose children are all Positioned
+            // collapses to zero size under the outer Stack's loose
+            // constraints, and the overlay would never be visible.
+            Positioned.fill(
+              child: Listener(
+                onPointerDown: (_) => _resetHideControlsTimer(),
+                child: IgnorePointer(
+                  ignoring: !showChrome,
+                  child: AnimatedOpacity(
+                    opacity: showChrome ? 1 : 0,
+                    duration: const Duration(milliseconds: 200),
+                    child: Stack(
+                      children: [
+                        _controlsOverlay(),
+                        Positioned(top: 0, left: 0, right: 0, child: _topBar()),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            )
+          else
+            Positioned(top: 0, left: 0, right: 0, child: _topBar()),
         ],
       ),
     );
@@ -672,6 +789,7 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
                           : null,
                       onChangeEnd: maxMs > 0
                           ? (value) {
+                              _userSeeked = true;
                               _player.seek(Duration(milliseconds: value.round()));
                               setState(() => _scrubbing = false);
                             }
@@ -689,8 +807,10 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
                   children: [
                     IconButton(
                       icon: const Icon(Icons.replay_10, color: Colors.white),
-                      onPressed: () =>
-                          _player.seek(_position - const Duration(seconds: 10)),
+                      onPressed: () {
+                        _userSeeked = true;
+                        _player.seek(_position - const Duration(seconds: 10));
+                      },
                     ),
                     IconButton(
                       iconSize: 44,
@@ -704,8 +824,10 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
                     ),
                     IconButton(
                       icon: const Icon(Icons.forward_10, color: Colors.white),
-                      onPressed: () =>
-                          _player.seek(_position + const Duration(seconds: 10)),
+                      onPressed: () {
+                        _userSeeked = true;
+                        _player.seek(_position + const Duration(seconds: 10));
+                      },
                     ),
                     const SizedBox(width: 12),
                     IconButton(

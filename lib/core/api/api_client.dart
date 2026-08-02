@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 
 import '../../shared/user_facing_error.dart';
 import '../app_version.dart';
@@ -23,6 +24,33 @@ class SessionExpiredException implements Exception {
 /// the server saying the refresh token is no good. A 429, a 5xx, a proxy that
 /// swallowed the call, or no connection at all say nothing about the session,
 /// and treating them as a sign-out is how a working login gets thrown away.
+/// A 2xx whose body isn't JSON. Internal: [ApiClient._send] catches it to
+/// retry, and turns whatever survives into a [ServerNotReadyException].
+class _NonJsonResponseException implements Exception {
+  const _NonJsonResponseException(this.statusCode);
+  final int statusCode;
+}
+
+/// The server answered, but with a page rather than data.
+///
+/// The install's `redirect/` tunnel serves a static waiting page — a plain
+/// 200 of HTML — while the host behind it is still coming up, and this
+/// deployment powers that host down whenever it has been idle. So this is a
+/// normal state to arrive at, not a malformed API. It says nothing about the
+/// session, and must never be treated as an auth failure.
+///
+/// An [ApiException] subclass so existing `on ApiException` handlers keep
+/// working; they just get a message that names the real situation instead of
+/// "Unexpected response from the server (not JSON)".
+class ServerNotReadyException extends ApiException {
+  const ServerNotReadyException({int? statusCode})
+      : super(
+          'The server is not ready yet — it may still be starting up. '
+          'Give it a moment and try again.',
+          statusCode: statusCode,
+        );
+}
+
 enum _RefreshOutcome {
   /// A new access token is in the store; replay the request.
   refreshed,
@@ -117,6 +145,14 @@ class ApiClient {
 
   static const _maxRedirects = 5;
 
+  /// Backoff for a server that answered with its waiting page. Deliberately
+  /// short — this runs inside a pull-to-refresh, and a host that is genuinely
+  /// booting won't be back inside any tolerable wait.
+  static const _notReadyRetryDelays = [
+    Duration(seconds: 1),
+    Duration(seconds: 2),
+  ];
+
   final String _baseUrl;
   final Dio _dio;
   final TokenStore tokens;
@@ -207,7 +243,42 @@ class ApiClient {
       _send<T>('DELETE', path,
           body: body, query: query, authenticated: authenticated);
 
+  /// Runs the call, retrying while the server answers with something that
+  /// isn't data at all.
+  ///
+  /// This deployment powers its host down once it has been idle (see
+  /// `IdleShutdownService`), and the `redirect/` tunnel in front of it serves
+  /// a static waiting page — a plain 200 of HTML — until the box is back.
+  /// Sitting in the player is the app's longest stretch of near-zero API
+  /// traffic, so coming back out to a menu refresh is exactly when it finds
+  /// the server asleep. A short retry covers a tunnel caught mid-rotation; a
+  /// genuinely booting host takes far longer than any budget worth blocking a
+  /// screen on, so past that the caller gets [ServerNotReadyException], whose
+  /// message says what is actually going on.
+  ///
+  /// Only GET is retried — a write may not be idempotent.
   Future<T> _send<T>(
+    String method,
+    String path, {
+    Object? body,
+    Map<String, dynamic>? query,
+    bool authenticated = false,
+  }) async {
+    for (var attempt = 0;; attempt++) {
+      final response = await _sendOnce(method, path,
+          body: body, query: query, authenticated: authenticated);
+      try {
+        return _unwrap<T>(response);
+      } on _NonJsonResponseException catch (err) {
+        if (method != 'GET' || attempt >= _notReadyRetryDelays.length) {
+          throw ServerNotReadyException(statusCode: err.statusCode);
+        }
+        await Future<void>.delayed(_notReadyRetryDelays[attempt]);
+      }
+    }
+  }
+
+  Future<Response<dynamic>> _sendOnce(
     String method,
     String path, {
     Object? body,
@@ -249,7 +320,7 @@ class ApiClient {
       }
     }
 
-    return _unwrap<T>(response);
+    return response;
   }
 
   /// Replays a request against a `Location` when the server redirects.
@@ -433,21 +504,42 @@ class ApiClient {
     var data = response.data;
 
     if (status >= 200 && status < 300) {
-      if (T == Null || data == null) return null as T;
       // A redirect hop or a proxy in front of the install can hand back a
       // 2xx whose body Dio didn't auto-decode as JSON — a missing/wrong
       // Content-Type is enough to make its transformer give up and return
       // the raw text. Decode it ourselves rather than crash the isolate on
       // an unhandled cast failure.
       if (data is String && data is! T) {
-        try {
-          data = jsonDecode(data);
-        } on FormatException {
-          throw ApiException(
-            'Unexpected response from the server (not JSON).',
-            statusCode: status,
-          );
+        final text = data.trim();
+        if (text.isEmpty) {
+          // An empty 2xx — a 204, or a handler that just ends the response —
+          // is "no content", not malformed JSON.
+          data = null;
+        } else {
+          try {
+            data = jsonDecode(text);
+          } on FormatException {
+            // The body is a page, not data. Logged in full-ish here because
+            // the user-facing message deliberately doesn't dump HTML at a
+            // viewer, and this is the only place the actual cause is visible.
+            debugPrint(
+              '[api] ${response.realUri} answered $status with '
+              '${response.headers.value('content-type')} that is not JSON: '
+              '${text.substring(0, text.length.clamp(0, 120))}',
+            );
+            throw _NonJsonResponseException(status);
+          }
         }
+      }
+      if (T == Null) return null as T;
+      if (data == null) {
+        // `null as T` is a bare TypeError for a caller that asked for a Map
+        // or a List, which tells whoever hits it nothing. Name it instead.
+        if (null is T) return null as T;
+        throw ApiException(
+          'The server returned an empty response.',
+          statusCode: status,
+        );
       }
       if (data is! T) {
         throw ApiException(

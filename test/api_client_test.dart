@@ -83,6 +83,21 @@ ResponseBody _json(String body, int statusCode) => ResponseBody.fromString(
       },
     );
 
+/// What the `redirect/` tunnel serves — a plain 200 of HTML — while the host
+/// behind it is still coming up.
+const _waitingPage =
+    '<!DOCTYPE html><html lang="it"><head><title>Streamio</title></head>'
+    '<body>Starting up…</body></html>';
+
+ResponseBody _html(String body, {int statusCode = 200}) =>
+    ResponseBody.fromString(
+      body,
+      statusCode,
+      headers: {
+        Headers.contentTypeHeader: ['text/html; charset=utf-8'],
+      },
+    );
+
 ResponseBody _redirect(String location, {int statusCode = 302}) =>
     ResponseBody.fromString(
       '',
@@ -656,6 +671,101 @@ void main() {
           'https://streamio.ddns.net/streamio/api/cast-proxy?url=x');
       expect(client.webSocketUrl('/ws/rooms/AB3C9K'),
           'wss://streamio.ddns.net/streamio/ws/rooms/AB3C9K');
+    });
+  });
+
+  // The host is powered down when idle and the `redirect/` tunnel in front of
+  // it answers 200 with a static waiting page until it is back. Sitting in the
+  // player is the app's longest stretch without API traffic, so the next menu
+  // refresh is where this lands.
+  group('a server that answers with its waiting page', () {
+    test('retries a GET and succeeds once the server is up', () async {
+      var calls = 0;
+      final adapter = _ScriptedAdapter((_) {
+        calls++;
+        return calls == 1
+            ? _html(_waitingPage)
+            : _json('{"data":[{"name":"Featured"}]}', 200);
+      });
+      final client = buildClient(adapter: adapter);
+
+      final result = await client.get<Map<String, dynamic>>('/api/home');
+
+      expect(result['data'], hasLength(1));
+      expect(calls, 2);
+    });
+
+    test('gives up with a message naming the cause, not "not JSON"', () async {
+      final adapter = _ScriptedAdapter((_) => _html(_waitingPage));
+      final client = buildClient(adapter: adapter);
+
+      await expectLater(
+        client.get<Map<String, dynamic>>('/api/home'),
+        throwsA(isA<ServerNotReadyException>().having(
+          (err) => err.message,
+          'message',
+          allOf(contains('starting up'), isNot(contains('JSON'))),
+        )),
+      );
+      // The initial attempt plus the two backoff retries.
+      expect(adapter.requests, hasLength(3));
+    });
+
+    test('does not retry a write, which may not be idempotent', () async {
+      final adapter = _ScriptedAdapter((_) => _html(_waitingPage));
+      final client = buildClient(adapter: adapter);
+
+      await expectLater(
+        client.post<Map<String, dynamic>>('/api/account/history'),
+        throwsA(isA<ServerNotReadyException>()),
+      );
+      expect(adapter.requests, hasLength(1));
+    });
+
+    // It says nothing about the session, so it must not cost the user their
+    // login the way a 401 would.
+    test('leaves the stored session alone', () async {
+      final adapter = _ScriptedAdapter((_) => _html(_waitingPage));
+      final client = buildClient(
+        adapter: adapter,
+        tokens: {
+          'streamio.access_token': 'access-1',
+          'streamio.refresh_token': 'refresh-1',
+        },
+      );
+
+      await expectLater(
+        client.get<Map<String, dynamic>>('/api/home', authenticated: true),
+        throwsA(isA<ServerNotReadyException>()),
+      );
+      expect(await client.tokens.accessToken, 'access-1');
+      expect(await client.tokens.refreshToken, 'refresh-1');
+    });
+  });
+
+  group('empty bodies', () {
+    test('a 204 is no content, not malformed JSON', () async {
+      final adapter = _ScriptedAdapter(
+          (_) => ResponseBody.fromString('', 204, headers: {}));
+      final client = buildClient(adapter: adapter);
+
+      await expectLater(
+          client.delete<void>('/api/account/history'), completes);
+    });
+
+    test('an empty body where data was expected says so', () async {
+      final adapter = _ScriptedAdapter(
+          (_) => ResponseBody.fromString('', 200, headers: {}));
+      final client = buildClient(adapter: adapter);
+
+      await expectLater(
+        client.get<Map<String, dynamic>>('/api/home'),
+        throwsA(isA<ApiException>().having(
+          (err) => err.message,
+          'message',
+          contains('empty'),
+        )),
+      );
     });
   });
 }
