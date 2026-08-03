@@ -2,6 +2,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/models/models.dart';
+import 'tv_focusable.dart';
 
 class PosterCard extends StatelessWidget {
   const PosterCard({
@@ -17,7 +18,7 @@ class PosterCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    return TvFocusable(
       onTap: onTap,
       child: SizedBox(
         width: width,

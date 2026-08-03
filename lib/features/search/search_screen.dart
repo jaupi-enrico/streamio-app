@@ -205,28 +205,30 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
     final activeProvider = ref.watch(activeProviderNameProvider);
 
-    return GridView.builder(
-      controller: _scrollController,
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 140,
-        childAspectRatio: 0.55,
-        crossAxisSpacing: 10,
-        mainAxisSpacing: 14,
+    return FocusTraversalGroup(
+      child: GridView.builder(
+        controller: _scrollController,
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+          maxCrossAxisExtent: 140,
+          childAspectRatio: 0.55,
+          crossAxisSpacing: 10,
+          mainAxisSpacing: 14,
+        ),
+        itemCount: _results.length + (_loadingMore ? 1 : 0),
+        itemBuilder: (context, i) {
+          if (i >= _results.length) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          final show = _results[i];
+          return PosterCard(
+            show: show,
+            width: 140,
+            onTap: () => context.push(
+                '/details/${show.providerName ?? activeProvider}/${Uri.encodeComponent(show.id)}'),
+          );
+        },
       ),
-      itemCount: _results.length + (_loadingMore ? 1 : 0),
-      itemBuilder: (context, i) {
-        if (i >= _results.length) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        final show = _results[i];
-        return PosterCard(
-          show: show,
-          width: 140,
-          onTap: () => context.push(
-              '/details/${show.providerName ?? activeProvider}/${Uri.encodeComponent(show.id)}'),
-        );
-      },
     );
   }
 }

@@ -7,6 +7,7 @@ import '../../core/models/models.dart';
 import '../../shared/widgets/async_states.dart';
 import '../../shared/widgets/poster_card.dart';
 import '../../shared/widgets/provider_chips.dart';
+import '../../shared/widgets/tv_focusable.dart';
 import '../../state/core_providers.dart';
 import 'catalog_providers.dart';
 
@@ -116,14 +117,19 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
                       SliverToBoxAdapter(
                         child: SizedBox(
                           height: 190,
-                          child: ListView.separated(
-                            scrollDirection: Axis.horizontal,
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
-                            itemCount: featured.length,
-                            separatorBuilder: (_, __) => const SizedBox(width: 12),
-                            itemBuilder: (context, i) => _FeaturedCard(
-                              show: featured[i],
-                              onTap: () => _open(context, featured[i], activeProvider),
+                          child: FocusTraversalGroup(
+                            child: ListView.separated(
+                              scrollDirection: Axis.horizontal,
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 16),
+                              itemCount: featured.length,
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(width: 12),
+                              itemBuilder: (context, i) => _FeaturedCard(
+                                show: featured[i],
+                                onTap: () =>
+                                    _open(context, featured[i], activeProvider),
+                              ),
                             ),
                           ),
                         ),
@@ -174,26 +180,29 @@ class _GenreFilter extends StatelessWidget {
       padding: const EdgeInsets.only(top: 8),
       child: SizedBox(
         height: 40,
-        child: ListView.separated(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          itemCount: genres.length + 1,
-          separatorBuilder: (_, __) => const SizedBox(width: 8),
-          itemBuilder: (context, i) {
-            if (i == 0) {
+        child: FocusTraversalGroup(
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            itemCount: genres.length + 1,
+            separatorBuilder: (_, __) => const SizedBox(width: 8),
+            itemBuilder: (context, i) {
+              if (i == 0) {
+                return ChoiceChip(
+                  label: const Text('All'),
+                  selected: selectedId == null,
+                  onSelected: (_) => onSelected(null),
+                );
+              }
+              final genre = genres[i - 1];
               return ChoiceChip(
-                label: const Text('All'),
-                selected: selectedId == null,
-                onSelected: (_) => onSelected(null),
+                label: Text(genre.name),
+                selected: genre.id == selectedId,
+                onSelected: (selected) =>
+                    onSelected(selected ? genre.id : null),
               );
-            }
-            final genre = genres[i - 1];
-            return ChoiceChip(
-              label: Text(genre.name),
-              selected: genre.id == selectedId,
-              onSelected: (selected) => onSelected(selected ? genre.id : null),
-            );
-          },
+            },
+          ),
         ),
       ),
     );
@@ -252,8 +261,8 @@ class _ShowGrid extends StatelessWidget {
           mainAxisSpacing: 14,
         ),
         delegate: SliverChildBuilderDelegate(
-          (context, i) =>
-              PosterCard(show: shows[i], width: 140, onTap: () => onTap(shows[i])),
+          (context, i) => PosterCard(
+              show: shows[i], width: 140, onTap: () => onTap(shows[i])),
           childCount: shows.length,
         ),
       ),
@@ -281,7 +290,7 @@ class _FeaturedCard extends StatelessWidget {
 
     return SizedBox(
       width: 260,
-      child: InkWell(
+      child: TvFocusable(
         onTap: onTap,
         borderRadius: BorderRadius.circular(10),
         child: Column(

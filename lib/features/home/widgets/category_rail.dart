@@ -22,18 +22,21 @@ class CategoryRail extends StatelessWidget {
         children: [
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text(category.name, style: Theme.of(context).textTheme.headlineSmall),
+            child: Text(category.name,
+                style: Theme.of(context).textTheme.headlineSmall),
           ),
           const SizedBox(height: 10),
           SizedBox(
             height: 210,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              itemCount: shows.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 10),
-              itemBuilder: (context, i) =>
-                  PosterCard(show: shows[i], onTap: () => onTap(shows[i])),
+            child: FocusTraversalGroup(
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                itemCount: shows.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 10),
+                itemBuilder: (context, i) =>
+                    PosterCard(show: shows[i], onTap: () => onTap(shows[i])),
+              ),
             ),
           ),
         ],

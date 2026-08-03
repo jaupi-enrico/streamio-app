@@ -16,10 +16,17 @@
          without the matching typed permission. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
 
+    <!-- Android TV: the app runs the same on TV as on phone/tablet (D-pad
+         navigation throughout, see lib/shared/tv.dart), so neither feature is
+         required — this keeps the same APK installable everywhere. -->
+    <uses-feature android:name="android.software.leanback" android:required="false"/>
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
+
     <application
         android:label="Streamio"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
+        android:banner="@drawable/tv_banner"
         android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
@@ -41,6 +48,12 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+            <!-- Makes the app appear on the Android TV / Google TV home
+                 launcher (leanback launcher), using the same MainActivity. -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER"/>
             </intent-filter>
         </activity>
 

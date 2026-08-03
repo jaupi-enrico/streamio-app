@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/models/models.dart';
 import '../../shared/widgets/async_states.dart';
+import '../../shared/widgets/tv_focusable.dart';
 import '../../state/api_providers.dart';
 import '../../state/auth_providers.dart';
 import '../downloads/download_sheet.dart';
@@ -15,7 +16,8 @@ import 'details_providers.dart';
 /// actions (watchlist / favorite / rating / share / watch party), a per-season
 /// episode list, and the download buttons.
 class DetailsScreen extends ConsumerStatefulWidget {
-  const DetailsScreen({super.key, required this.provider, required this.showId});
+  const DetailsScreen(
+      {super.key, required this.provider, required this.showId});
 
   final String provider;
   final String showId;
@@ -58,26 +60,30 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
 
   Future<void> _toggleWatchlist() => _requireSignIn(() async {
         final api = ref.read(accountApiProvider);
-        final inList = ref.read(inWatchlistProvider(_showRef)).valueOrNull ?? false;
+        final inList =
+            ref.read(inWatchlistProvider(_showRef)).valueOrNull ?? false;
         final ok = await runGuarded(
           context,
           () => inList
               ? api.removeFromWatchlist(widget.provider, widget.showId)
               : api.addToWatchlist(widget.provider, widget.showId),
-          successMessage: inList ? 'Removed from watchlist' : 'Added to watchlist',
+          successMessage:
+              inList ? 'Removed from watchlist' : 'Added to watchlist',
         );
         if (ok) ref.invalidate(inWatchlistProvider(_showRef));
       });
 
   Future<void> _toggleFavorite() => _requireSignIn(() async {
         final api = ref.read(accountApiProvider);
-        final isFavorite = ref.read(isFavoriteProvider(_showRef)).valueOrNull ?? false;
+        final isFavorite =
+            ref.read(isFavoriteProvider(_showRef)).valueOrNull ?? false;
         final ok = await runGuarded(
           context,
           () => isFavorite
               ? api.removeFavorite(widget.provider, widget.showId)
               : api.addFavorite(widget.provider, widget.showId),
-          successMessage: isFavorite ? 'Removed from favorites' : 'Added to favorites',
+          successMessage:
+              isFavorite ? 'Removed from favorites' : 'Added to favorites',
         );
         if (ok) ref.invalidate(isFavoriteProvider(_showRef));
       });
@@ -138,7 +144,8 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
           context.push(
               '/watch/${widget.provider}/${Uri.encodeComponent(playbackId)}?${Uri(queryParameters: query).query}');
         } catch (err) {
-          if (mounted) showToast(context, ErrorState.messageFor(err), isError: true);
+          if (mounted)
+            showToast(context, ErrorState.messageFor(err), isError: true);
         }
       });
 
@@ -222,7 +229,8 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
                     ),
                     const SizedBox(width: 10),
                     IconButton.filledTonal(
-                      onPressed: () => _download(movie.id, 'movie', movie.title),
+                      onPressed: () =>
+                          _download(movie.id, 'movie', movie.title),
                       icon: const Icon(Icons.download_outlined),
                       tooltip: 'Download for offline',
                     ),
@@ -295,14 +303,18 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
                   const SizedBox(height: 8),
                   SizedBox(
                     height: 40,
-                    child: ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      itemCount: seasons.length,
-                      separatorBuilder: (_, __) => const SizedBox(width: 8),
-                      itemBuilder: (context, i) => ChoiceChip(
-                        label: Text(seasons[i].title ?? 'Season ${seasons[i].number}'),
-                        selected: i == _selectedSeasonIndex,
-                        onSelected: (_) => setState(() => _selectedSeasonIndex = i),
+                    child: FocusTraversalGroup(
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: seasons.length,
+                        separatorBuilder: (_, __) => const SizedBox(width: 8),
+                        itemBuilder: (context, i) => ChoiceChip(
+                          label: Text(seasons[i].title ??
+                              'Season ${seasons[i].number}'),
+                          selected: i == _selectedSeasonIndex,
+                          onSelected: (_) =>
+                              setState(() => _selectedSeasonIndex = i),
+                        ),
                       ),
                     ),
                   ),
@@ -348,8 +360,9 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
 
   static String _episodeLabel(Episode episode, {Season? season}) {
     final seasonNumber = season?.number ?? episode.season?.number;
-    final prefix =
-        seasonNumber != null ? 'S${seasonNumber.toString().padLeft(2, '0')}' : '';
+    final prefix = seasonNumber != null
+        ? 'S${seasonNumber.toString().padLeft(2, '0')}'
+        : '';
     return '${prefix}E${episode.number.toString().padLeft(2, '0')}';
   }
 
@@ -368,7 +381,8 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
               CachedNetworkImage(
                 imageUrl: banner,
                 fit: BoxFit.cover,
-                errorWidget: (_, __, ___) => Container(color: const Color(0xFF1E2430)),
+                errorWidget: (_, __, ___) =>
+                    Container(color: const Color(0xFF1E2430)),
               )
             else
               Container(color: const Color(0xFF1E2430)),
@@ -397,7 +411,8 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
   }) {
     final parts = <String>[
       if (year != null) '$year',
-      if (seasons != null && seasons > 0) '$seasons season${seasons == 1 ? '' : 's'}',
+      if (seasons != null && seasons > 0)
+        '$seasons season${seasons == 1 ? '' : 's'}',
       if (runtime != null && runtime > 0) '$runtime min',
       if (quality != null && quality.isNotEmpty) quality,
     ];
@@ -423,43 +438,47 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
   }
 
   Widget _actionRow(Show show) {
-    final inWatchlist = ref.watch(inWatchlistProvider(_showRef)).valueOrNull ?? false;
-    final isFavorite = ref.watch(isFavoriteProvider(_showRef)).valueOrNull ?? false;
+    final inWatchlist =
+        ref.watch(inWatchlistProvider(_showRef)).valueOrNull ?? false;
+    final isFavorite =
+        ref.watch(isFavoriteProvider(_showRef)).valueOrNull ?? false;
     final myRating = ref.watch(myRatingProvider(_showRef)).valueOrNull;
 
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: [
-          _ActionButton(
-            icon: inWatchlist ? Icons.bookmark : Icons.bookmark_border,
-            label: inWatchlist ? 'In list' : 'Watchlist',
-            active: inWatchlist,
-            onTap: _toggleWatchlist,
-          ),
-          _ActionButton(
-            icon: isFavorite ? Icons.favorite : Icons.favorite_border,
-            label: 'Favorite',
-            active: isFavorite,
-            onTap: _toggleFavorite,
-          ),
-          _ActionButton(
-            icon: myRating != null ? Icons.star : Icons.star_border,
-            label: myRating != null ? '${myRating.round()}/10' : 'Rate',
-            active: myRating != null,
-            onTap: _rate,
-          ),
-          _ActionButton(
-            icon: Icons.ios_share,
-            label: 'Share',
-            onTap: () => _share(show.title),
-          ),
-          _ActionButton(
-            icon: Icons.groups_outlined,
-            label: 'Watch party',
-            onTap: () => _startWatchParty(show),
-          ),
-        ],
+    return FocusTraversalGroup(
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            _ActionButton(
+              icon: inWatchlist ? Icons.bookmark : Icons.bookmark_border,
+              label: inWatchlist ? 'In list' : 'Watchlist',
+              active: inWatchlist,
+              onTap: _toggleWatchlist,
+            ),
+            _ActionButton(
+              icon: isFavorite ? Icons.favorite : Icons.favorite_border,
+              label: 'Favorite',
+              active: isFavorite,
+              onTap: _toggleFavorite,
+            ),
+            _ActionButton(
+              icon: myRating != null ? Icons.star : Icons.star_border,
+              label: myRating != null ? '${myRating.round()}/10' : 'Rate',
+              active: myRating != null,
+              onTap: _rate,
+            ),
+            _ActionButton(
+              icon: Icons.ios_share,
+              label: 'Share',
+              onTap: () => _share(show.title),
+            ),
+            _ActionButton(
+              icon: Icons.groups_outlined,
+              label: 'Watch party',
+              onTap: () => _startWatchParty(show),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -537,50 +556,53 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('More like this', style: Theme.of(context).textTheme.titleMedium),
+          Text('More like this',
+              style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 10),
           SizedBox(
             height: 200,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: shows.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 10),
-              itemBuilder: (context, i) {
-                final show = shows[i];
-                return SizedBox(
-                  width: 110,
-                  child: GestureDetector(
-                    // replace(), not push(): following recommendations
-                    // shouldn't build an unbounded back stack of details pages.
-                    onTap: () => context.replace(
-                        '/details/${show.providerName ?? widget.provider}/${Uri.encodeComponent(show.id)}'),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(8),
-                            child: show.poster != null
-                                ? CachedNetworkImage(
-                                    imageUrl: show.poster!,
-                                    fit: BoxFit.cover,
-                                    width: double.infinity,
-                                    errorWidget: (_, __, ___) =>
-                                        Container(color: const Color(0xFF1E2430)),
-                                  )
-                                : Container(color: const Color(0xFF1E2430)),
+            child: FocusTraversalGroup(
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: shows.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 10),
+                itemBuilder: (context, i) {
+                  final show = shows[i];
+                  return SizedBox(
+                    width: 110,
+                    child: TvFocusable(
+                      // replace(), not push(): following recommendations
+                      // shouldn't build an unbounded back stack of details pages.
+                      onTap: () => context.replace(
+                          '/details/${show.providerName ?? widget.provider}/${Uri.encodeComponent(show.id)}'),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: show.poster != null
+                                  ? CachedNetworkImage(
+                                      imageUrl: show.poster!,
+                                      fit: BoxFit.cover,
+                                      width: double.infinity,
+                                      errorWidget: (_, __, ___) => Container(
+                                          color: const Color(0xFF1E2430)),
+                                    )
+                                  : Container(color: const Color(0xFF1E2430)),
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(show.title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.bodySmall),
-                      ],
+                          const SizedBox(height: 6),
+                          Text(show.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall),
+                        ],
+                      ),
                     ),
-                  ),
-                );
-              },
+                  );
+                },
+              ),
             ),
           ),
         ],
@@ -604,11 +626,12 @@ class _ActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color =
-        active ? Theme.of(context).colorScheme.primary : Theme.of(context).hintColor;
+    final color = active
+        ? Theme.of(context).colorScheme.primary
+        : Theme.of(context).hintColor;
     return Padding(
       padding: const EdgeInsets.only(right: 8),
-      child: InkWell(
+      child: TvFocusable(
         onTap: onTap,
         borderRadius: BorderRadius.circular(8),
         child: Padding(
@@ -619,8 +642,10 @@ class _ActionButton extends StatelessWidget {
               Icon(icon, color: color),
               const SizedBox(height: 4),
               Text(label,
-                  style:
-                      Theme.of(context).textTheme.labelSmall?.copyWith(color: color)),
+                  style: Theme.of(context)
+                      .textTheme
+                      .labelSmall
+                      ?.copyWith(color: color)),
             ],
           ),
         ),
@@ -696,8 +721,8 @@ class _EpisodesSliver extends ConsumerWidget {
       return _list(context, ref, season.episodes);
     }
 
-    final episodesAsync =
-        ref.watch(seasonEpisodesProvider((provider: provider, seasonId: season.id)));
+    final episodesAsync = ref.watch(
+        seasonEpisodesProvider((provider: provider, seasonId: season.id)));
 
     return episodesAsync.when(
       loading: () => const SliverToBoxAdapter(
@@ -709,7 +734,8 @@ class _EpisodesSliver extends ConsumerWidget {
       error: (error, _) => SliverToBoxAdapter(
         child: Padding(
           padding: const EdgeInsets.all(16),
-          child: Text('Could not load episodes: ${ErrorState.messageFor(error)}'),
+          child:
+              Text('Could not load episodes: ${ErrorState.messageFor(error)}'),
         ),
       ),
       data: (episodes) => _list(context, ref, episodes),
@@ -767,7 +793,8 @@ class _EpisodesSliver extends ConsumerWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               if (episode.overview != null)
-                Text(episode.overview!, maxLines: 2, overflow: TextOverflow.ellipsis),
+                Text(episode.overview!,
+                    maxLines: 2, overflow: TextOverflow.ellipsis),
               if (progress != null && progress.progressFraction != null) ...[
                 const SizedBox(height: 6),
                 LinearProgressIndicator(

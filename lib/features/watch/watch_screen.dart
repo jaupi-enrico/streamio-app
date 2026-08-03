@@ -13,6 +13,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../core/db/app_database.dart';
 import '../../core/models/models.dart';
+import '../../shared/tv.dart';
 import '../../shared/user_facing_error.dart';
 import '../../shared/widgets/async_states.dart';
 import '../../state/api_providers.dart';
@@ -224,7 +225,8 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
       final start = await _resolveStartPosition();
       final media = _isOffline
           ? await _offlineMedia(start: start)
-          : await _onlineMedia(serverIndex: serverIndex ?? _serverIndex, start: start);
+          : await _onlineMedia(
+              serverIndex: serverIndex ?? _serverIndex, start: start);
 
       _resumeConfirmed = start == null;
       _userSeeked = false;
@@ -297,7 +299,8 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
           continue;
         }
 
-        debugPrint('[resume] attempt=$attempt fell back to $position, re-seeking');
+        debugPrint(
+            '[resume] attempt=$attempt fell back to $position, re-seeking');
         settled = 0;
         await _player.seek(start);
       }
@@ -307,11 +310,13 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
   }
 
   Future<Media> _offlineMedia({Duration? start}) async {
-    final url = await ref.read(localMediaServerProvider).serve(widget.downloadId!);
+    final url =
+        await ref.read(localMediaServerProvider).serve(widget.downloadId!);
     return Media(url, start: start);
   }
 
-  Future<Media> _onlineMedia({required int serverIndex, Duration? start}) async {
+  Future<Media> _onlineMedia(
+      {required int serverIndex, Duration? start}) async {
     final result = await resolvePlayback(
       ref.read(contentApiProvider),
       widget.provider,
@@ -450,7 +455,8 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
             episodeId: _historyEpisodeId,
             episodeLabel: widget.episodeLabel,
             progressSeconds: seconds,
-            durationSeconds: _duration.inSeconds > 0 ? _duration.inSeconds : null,
+            durationSeconds:
+                _duration.inSeconds > 0 ? _duration.inSeconds : null,
             completed: completed,
           );
     } catch (_) {
@@ -462,7 +468,9 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
     await _saveProgress(completed: true);
     if (!mounted) return;
 
-    if (!_isOffline && !_autoplayNextCancelled && _contentType == 'episode' &&
+    if (!_isOffline &&
+        !_autoplayNextCancelled &&
+        _contentType == 'episode' &&
         widget.showId != null) {
       final next = await ref.read(nextEpisodeProvider((
         provider: widget.provider,
@@ -481,7 +489,9 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
 
   static String _nextEpisodeLabel(Episode episode) {
     final seasonNumber = episode.season?.number;
-    final prefix = seasonNumber != null ? 'S${seasonNumber.toString().padLeft(2, '0')}' : '';
+    final prefix = seasonNumber != null
+        ? 'S${seasonNumber.toString().padLeft(2, '0')}'
+        : '';
     return '${prefix}E${episode.number.toString().padLeft(2, '0')}';
   }
 
@@ -511,8 +521,9 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
             for (var i = 0; i < _servers.length; i++)
               ListTile(
                 onTap: () => Navigator.of(context).pop(i),
-                title: Text(
-                    _servers[i].name.isEmpty ? 'Server ${i + 1}' : _servers[i].name),
+                title: Text(_servers[i].name.isEmpty
+                    ? 'Server ${i + 1}'
+                    : _servers[i].name),
                 trailing: i == _serverIndex ? const Icon(Icons.check) : null,
               ),
           ],
@@ -543,7 +554,8 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
               if (track.id != 'no' && track.id != 'auto')
                 ListTile(
                   title: Text(track.title ?? track.language ?? track.id),
-                  trailing: track.id == current.id ? const Icon(Icons.check) : null,
+                  trailing:
+                      track.id == current.id ? const Icon(Icons.check) : null,
                   onTap: () => Navigator.of(context).pop(track),
                 ),
           ],
@@ -568,7 +580,8 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
               if (track.id != 'no')
                 ListTile(
                   title: Text(track.title ?? track.language ?? track.id),
-                  trailing: track.id == current.id ? const Icon(Icons.check) : null,
+                  trailing:
+                      track.id == current.id ? const Icon(Icons.check) : null,
                   onTap: () => Navigator.of(context).pop(track),
                 ),
           ],
@@ -592,7 +605,8 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
             for (final track in tracks)
               ListTile(
                 title: Text(track.h != null ? '${track.h}p' : track.id),
-                trailing: track.id == current.id ? const Icon(Icons.check) : null,
+                trailing:
+                    track.id == current.id ? const Icon(Icons.check) : null,
                 onTap: () => Navigator.of(context).pop(track),
               ),
           ],
@@ -695,8 +709,10 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
   // last had focus.
 
   Map<ShortcutActivator, Intent> get _playerShortcuts => {
-        const SingleActivator(LogicalKeyboardKey.space): const _PlayPauseIntent(),
-        const SingleActivator(LogicalKeyboardKey.mediaPlayPause): const _PlayPauseIntent(),
+        const SingleActivator(LogicalKeyboardKey.space):
+            const _PlayPauseIntent(),
+        const SingleActivator(LogicalKeyboardKey.mediaPlayPause):
+            const _PlayPauseIntent(),
         const SingleActivator(LogicalKeyboardKey.arrowLeft):
             const _SeekIntent(Duration(seconds: -10)),
         const SingleActivator(LogicalKeyboardKey.arrowRight):
@@ -732,7 +748,9 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
     final showChrome = _loading || _error != null || _controlsVisible;
 
     Episode? nextEpisode;
-    if (!_isOffline && !_autoplayNextCancelled && _contentType == 'episode' &&
+    if (!_isOffline &&
+        !_autoplayNextCancelled &&
+        _contentType == 'episode' &&
         widget.showId != null) {
       nextEpisode = ref
           .watch(nextEpisodeProvider((
@@ -742,7 +760,8 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
           )))
           .valueOrNull;
     }
-    final remaining = _duration > Duration.zero ? _duration - _position : Duration.zero;
+    final remaining =
+        _duration > Duration.zero ? _duration - _position : Duration.zero;
     final showNextEpisodePrompt = !_loading &&
         _error == null &&
         nextEpisode != null &&
@@ -755,7 +774,23 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
         actions: _playerActions,
         child: Focus(
           autofocus: true,
-          child: _buildScaffold(showChrome, showNextEpisodePrompt, nextEpisode, remaining),
+          // A D-pad remote has no touch/pointer events, so nothing else here
+          // shows the controls overlay or resets its auto-hide timer — the
+          // existing GestureDetector.onTap and Listener.onPointerDown (below)
+          // only fire for touch/mouse. Any key press does the same job here,
+          // without consuming the event so the Shortcuts above still see it.
+          onKeyEvent: (node, event) {
+            if (event is KeyDownEvent) {
+              if (_controlsVisible) {
+                _resetHideControlsTimer();
+              } else {
+                _toggleControls();
+              }
+            }
+            return KeyEventResult.ignored;
+          },
+          child: _buildScaffold(
+              showChrome, showNextEpisodePrompt, nextEpisode, remaining),
         ),
       ),
     );
@@ -783,7 +818,8 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
                     : GestureDetector(
                         behavior: HitTestBehavior.opaque,
                         onTap: _toggleControls,
-                        child: Video(controller: _controller, controls: NoVideoControls),
+                        child: Video(
+                            controller: _controller, controls: NoVideoControls),
                       ),
           ),
           if (!_loading && _error == null)
@@ -816,14 +852,16 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
           // showNextEpisodePrompt is only true when nextEpisode is non-null
           // (see build()), but that promotion doesn't cross the call into
           // this method, hence the `!`.
-          if (showNextEpisodePrompt) _nextEpisodePrompt(nextEpisode!, remaining),
+          if (showNextEpisodePrompt)
+            _nextEpisodePrompt(nextEpisode!, remaining),
         ],
       ),
     );
   }
 
   Widget _nextEpisodePrompt(Episode next, Duration remaining) {
-    final seconds = remaining.inSeconds.clamp(0, _nextEpisodeThreshold.inSeconds);
+    final seconds =
+        remaining.inSeconds.clamp(0, _nextEpisodeThreshold.inSeconds);
     return Positioned(
       right: 16,
       bottom: 100,
@@ -836,7 +874,8 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
             color: const Color(0xE61A1A1A),
             borderRadius: BorderRadius.circular(10),
             boxShadow: const [
-              BoxShadow(color: Colors.black54, blurRadius: 12, offset: Offset(0, 4)),
+              BoxShadow(
+                  color: Colors.black54, blurRadius: 12, offset: Offset(0, 4)),
             ],
           ),
           child: Column(
@@ -848,17 +887,20 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
                   Expanded(
                     child: Text(
                       'Next: ${_nextEpisodeLabel(next)}',
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                      style: const TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.w600),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
                   IconButton(
-                    icon: const Icon(Icons.close, color: Colors.white70, size: 18),
+                    icon: const Icon(Icons.close,
+                        color: Colors.white70, size: 18),
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(),
                     tooltip: 'Cancel',
-                    onPressed: () => setState(() => _autoplayNextCancelled = true),
+                    onPressed: () =>
+                        setState(() => _autoplayNextCancelled = true),
                   ),
                 ],
               ),
@@ -902,7 +944,8 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
           children: [
             IconButton(
               icon: const Icon(Icons.arrow_back, color: Colors.white),
-              onPressed: () => context.canPop() ? context.pop() : context.go('/'),
+              onPressed: () =>
+                  context.canPop() ? context.pop() : context.go('/'),
             ),
             Expanded(
               child: Column(
@@ -920,14 +963,16 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
                         if (widget.episodeLabel != null) widget.episodeLabel!,
                         if (_isOffline) 'Offline',
                       ].join(' · '),
-                      style: const TextStyle(color: Colors.white54, fontSize: 12),
+                      style:
+                          const TextStyle(color: Colors.white54, fontSize: 12),
                     ),
                 ],
               ),
             ),
             // Offline downloads live on this device only — a receiver on the
             // network can't reach the loopback server that serves them.
-            if (!_isOffline && (ref.watch(castAvailableProvider).valueOrNull ?? false))
+            if (!_isOffline &&
+                (ref.watch(castAvailableProvider).valueOrNull ?? false))
               IconButton(
                 icon: Icon(
                   ref.watch(castSessionProvider).valueOrNull != null
@@ -983,78 +1028,97 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
               Row(
                 children: [
                   Text(_formatTime(_position),
-                      style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                      style:
+                          const TextStyle(color: Colors.white70, fontSize: 12)),
                   Expanded(
-                    child: Slider(
-                      value: maxMs > 0 ? valueMs : 0,
-                      max: maxMs > 0 ? maxMs : 1,
-                      onChangeStart: maxMs > 0
-                          ? (_) => setState(() => _scrubbing = true)
-                          : null,
-                      onChanged: maxMs > 0
-                          ? (value) => setState(() =>
-                              _position = Duration(milliseconds: value.round()))
-                          : null,
-                      onChangeEnd: maxMs > 0
-                          ? (value) {
-                              _userSeeked = true;
-                              _player.seek(Duration(milliseconds: value.round()));
-                              setState(() => _scrubbing = false);
-                            }
-                          : null,
+                    // Never focusable: the screen-level ±10s arrowLeft/Right
+                    // Shortcuts already own seeking, and if this ever took
+                    // focus its own arrow-key drag handling would be
+                    // intercepted by that ancestor Shortcuts anyway (it's
+                    // placed to win over any focused descendant's default key
+                    // behavior — see _playerShortcuts above). It's kept
+                    // purely as a visual progress indicator here.
+                    child: FocusTraversalGroup(
+                      descendantsAreFocusable: false,
+                      child: Slider(
+                        value: maxMs > 0 ? valueMs : 0,
+                        max: maxMs > 0 ? maxMs : 1,
+                        onChangeStart: maxMs > 0
+                            ? (_) => setState(() => _scrubbing = true)
+                            : null,
+                        onChanged: maxMs > 0
+                            ? (value) => setState(() => _position =
+                                Duration(milliseconds: value.round()))
+                            : null,
+                        onChangeEnd: maxMs > 0
+                            ? (value) {
+                                _userSeeked = true;
+                                _player.seek(
+                                    Duration(milliseconds: value.round()));
+                                setState(() => _scrubbing = false);
+                              }
+                            : null,
+                      ),
                     ),
                   ),
                   Text(_formatTime(duration),
-                      style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                      style:
+                          const TextStyle(color: Colors.white70, fontSize: 12)),
                 ],
               ),
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.replay_10, color: Colors.white),
-                      onPressed: () => _seekBy(const Duration(seconds: -10)),
-                    ),
-                    IconButton(
-                      iconSize: 44,
-                      icon: Icon(
-                        _playing
-                            ? Icons.pause_circle_filled
-                            : Icons.play_circle_filled,
-                        color: Colors.white,
-                      ),
-                      onPressed: _player.playOrPause,
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.forward_10, color: Colors.white),
-                      onPressed: () => _seekBy(const Duration(seconds: 10)),
-                    ),
-                    const SizedBox(width: 12),
-                    IconButton(
-                      icon: const Icon(Icons.closed_caption_outlined,
-                          color: Colors.white),
-                      tooltip: 'Subtitles',
-                      onPressed: _pickSubtitle,
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.audiotrack_outlined, color: Colors.white),
-                      tooltip: 'Audio track',
-                      onPressed: _pickAudioTrack,
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.hd_outlined, color: Colors.white),
-                      tooltip: 'Quality',
-                      onPressed: _pickQuality,
-                    ),
-                    if (!_isOffline && _servers.length > 1)
+              FocusTraversalGroup(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
                       IconButton(
-                        icon: const Icon(Icons.dns_outlined, color: Colors.white),
-                        tooltip: 'Source server',
-                        onPressed: _pickServer,
+                        icon: const Icon(Icons.replay_10, color: Colors.white),
+                        onPressed: () => _seekBy(const Duration(seconds: -10)),
                       ),
-                  ],
+                      IconButton(
+                        autofocus: isTv(context),
+                        iconSize: 44,
+                        icon: Icon(
+                          _playing
+                              ? Icons.pause_circle_filled
+                              : Icons.play_circle_filled,
+                          color: Colors.white,
+                        ),
+                        onPressed: _player.playOrPause,
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.forward_10, color: Colors.white),
+                        onPressed: () => _seekBy(const Duration(seconds: 10)),
+                      ),
+                      const SizedBox(width: 12),
+                      IconButton(
+                        icon: const Icon(Icons.closed_caption_outlined,
+                            color: Colors.white),
+                        tooltip: 'Subtitles',
+                        onPressed: _pickSubtitle,
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.audiotrack_outlined,
+                            color: Colors.white),
+                        tooltip: 'Audio track',
+                        onPressed: _pickAudioTrack,
+                      ),
+                      IconButton(
+                        icon:
+                            const Icon(Icons.hd_outlined, color: Colors.white),
+                        tooltip: 'Quality',
+                        onPressed: _pickQuality,
+                      ),
+                      if (!_isOffline && _servers.length > 1)
+                        IconButton(
+                          icon: const Icon(Icons.dns_outlined,
+                              color: Colors.white),
+                          tooltip: 'Source server',
+                          onPressed: _pickServer,
+                        ),
+                    ],
+                  ),
                 ),
               ),
             ],

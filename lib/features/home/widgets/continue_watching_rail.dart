@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/models/models.dart';
+import '../../../shared/widgets/tv_focusable.dart';
 import '../../../state/show_summary_providers.dart';
 
 /// `home.js`'s `#continueRow`: landscape cards with a progress bar, tapping
@@ -16,6 +17,7 @@ class ContinueWatchingRail extends StatelessWidget {
   });
 
   final List<HistoryEntry> entries;
+
   /// The resolved title is passed along so the watch screen can show it
   /// while it loads — the history row itself has only the show id.
   final void Function(HistoryEntry entry, String title) onResume;
@@ -38,16 +40,18 @@ class ContinueWatchingRail extends StatelessWidget {
           const SizedBox(height: 10),
           SizedBox(
             height: 150,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              itemCount: entries.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 12),
-              itemBuilder: (context, i) => _ContinueCard(
-                entry: entries[i],
-                onResume: onResume,
-                onDismiss:
-                    onDismiss == null ? null : () => onDismiss!(entries[i]),
+            child: FocusTraversalGroup(
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                itemCount: entries.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 12),
+                itemBuilder: (context, i) => _ContinueCard(
+                  entry: entries[i],
+                  onResume: onResume,
+                  onDismiss:
+                      onDismiss == null ? null : () => onDismiss!(entries[i]),
+                ),
               ),
             ),
           ),
@@ -58,7 +62,8 @@ class ContinueWatchingRail extends StatelessWidget {
 }
 
 class _ContinueCard extends ConsumerWidget {
-  const _ContinueCard({required this.entry, required this.onResume, this.onDismiss});
+  const _ContinueCard(
+      {required this.entry, required this.onResume, this.onDismiss});
 
   final HistoryEntry entry;
   final void Function(HistoryEntry entry, String title) onResume;
@@ -80,7 +85,7 @@ class _ContinueCard extends ConsumerWidget {
 
     return SizedBox(
       width: 210,
-      child: InkWell(
+      child: TvFocusable(
         onTap: () => onResume(entry, display.title),
         onLongPress: onDismiss,
         borderRadius: BorderRadius.circular(10),
@@ -140,7 +145,8 @@ class _ContinueCard extends ConsumerWidget {
                 entry.episodeLabel!,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.labelSmall?.copyWith(color: theme.hintColor),
+                style: theme.textTheme.labelSmall
+                    ?.copyWith(color: theme.hintColor),
               ),
           ],
         ),
