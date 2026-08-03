@@ -9,6 +9,7 @@ import 'package:streamio/core/api/api_client.dart';
 import 'package:streamio/core/api/token_store.dart';
 import 'package:streamio/core/app_version.dart';
 import 'package:streamio/core/models/models.dart';
+import 'package:streamio/routing/app_router.dart' show rootNavigatorKey;
 import 'package:streamio/shared/widgets/update_gate.dart';
 import 'package:streamio/state/update_providers.dart';
 
@@ -260,10 +261,17 @@ void main() {
   });
 
   group('UpdateGate', () {
+    // Mirrors production wiring (app.dart): `UpdateGate` sits in
+    // `MaterialApp.router`'s `builder`, wrapping `child` from *outside* the
+    // Navigator rather than as `home`, so any dialog it shows has to go
+    // through the router's own navigator key to find a Navigator ancestor.
     Widget wrap(List<Override> overrides) => ProviderScope(
           overrides: overrides,
-          child: const MaterialApp(
-            home: UpdateGate(child: Text('APP CONTENT')),
+          child: MaterialApp(
+            navigatorKey: rootNavigatorKey,
+            home: const Text('APP CONTENT'),
+            builder: (context, child) =>
+                UpdateGate(child: child ?? const SizedBox.shrink()),
           ),
         );
 

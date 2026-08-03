@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api/api_client.dart';
+import '../../routing/app_router.dart' show rootNavigatorKey;
 import '../../state/update_providers.dart';
 
 /// Wraps the whole app to handle the server's client-version policy.
@@ -69,8 +70,15 @@ class _UpdateGateState extends ConsumerState<UpdateGate> {
     // from build throws.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      // Not `context`: this widget wraps `child` in `MaterialApp.router`'s
+      // `builder`, which places it *above* the Router's Navigator in the
+      // tree, not inside it — `showDialog(context: context)` would find no
+      // Navigator ancestor and silently fail to show anything. The router's
+      // own navigator key gives a context that's actually inside it.
+      final navContext = rootNavigatorKey.currentContext;
+      if (navContext == null) return;
       showDialog<void>(
-        context: context,
+        context: navContext,
         builder: (context) => AlertDialog(
           title: const Text('Update available'),
           content: Column(

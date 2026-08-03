@@ -96,9 +96,19 @@ notes="$(printf '%s' "$notes" | sed -e '$a\')"
 [[ -n "$(printf '%s' "$notes" | tr -d '[:space:]')" ]] || die "a description is required."
 
 echo
+read -r -p "Is this a mandatory update — block installs older than ${new_semver}? [y/N] " confirm_mandatory
+mandatory=false
+[[ "$confirm_mandatory" =~ ^[Yy]$ ]] && mandatory=true
+
+echo
 echo "${BOLD}About to release:${RESET}"
 echo "  ${current_version} -> ${new_version}"
 echo "  branch: ${branch}"
+if [[ "$mandatory" == true ]]; then
+  echo "  mandatory: ${YELLOW}yes — older builds will be blocked once uploaded${RESET}"
+else
+  echo "  mandatory: no — suggested only"
+fi
 echo "  notes:"
 printf '%s\n' "$notes" | sed 's/^/    /'
 read -r -p "Bump version and build the APK? [y/N] " confirm_build
@@ -135,6 +145,10 @@ echo
 read -r -p "Upload the APK to a Streamio server now? [y/N] " confirm_upload
 if [[ ! "$confirm_upload" =~ ^[Yy]$ ]]; then
   echo "Skipping upload. APK is at ${apk_path}."
+  if [[ "$mandatory" == true ]]; then
+    echo "${YELLOW}Note:${RESET} you said this was mandatory, but nothing was uploaded or"
+    echo "enforced on the server — that step only happens as part of the upload flow."
+  fi
   echo "${GREEN}Done.${RESET} Version ${new_version} built and committed."
   exit 0
 fi
@@ -204,7 +218,25 @@ upload_code="$(tail -1 <<<"$upload_resp")"
 upload_body="$(sed '$d' <<<"$upload_resp")"
 [[ "$upload_code" == "200" ]] || die "APK upload failed (HTTP ${upload_code}): ${upload_body}"
 
+# Only raise the floor once the build above is actually reachable — the APK
+# upload just landed and set Download URL, so it's safe now. Doing this
+# before the upload would 426 every older client against a download link
+# that didn't exist yet.
+if [[ "$mandatory" == true ]]; then
+  echo "Blocking installs older than ${new_semver}..."
+  enforce_resp="$("${CURL[@]}" -w '\n%{http_code}' -X PUT "${server}/api/settings/client-version" \
+    -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" \
+    -d "$(jq -n --arg m "$new_semver" '{min_supported: $m, enforce: true}')")"
+  enforce_code="$(tail -1 <<<"$enforce_resp")"
+  enforce_body="$(sed '$d' <<<"$enforce_resp")"
+  [[ "$enforce_code" == "200" ]] || die "failed to enforce minimum version (HTTP ${enforce_code}): ${enforce_body}"
+fi
+
 echo
 echo "${GREEN}Released ${new_version} and uploaded to ${server}.${RESET}"
-echo "Minimum supported version and enforcement were left untouched — raise those"
-echo "separately (Admin -> App Version Policy) once the build is confirmed working."
+if [[ "$mandatory" == true ]]; then
+  echo "Marked mandatory: builds older than ${new_semver} are now blocked."
+else
+  echo "Minimum supported version and enforcement were left untouched — raise those"
+  echo "separately (Admin -> App Version Policy) once the build is confirmed working."
+fi

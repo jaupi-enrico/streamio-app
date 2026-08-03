@@ -117,12 +117,12 @@ class SocialApi {
         authenticated: true,
         body: {
           'provider': provider,
-          'showId': showId,
-          'recipientIds': recipientIds,
-          if (episodeId != null) 'episodeId': episodeId,
-          if (episodeLabel != null) 'episodeLabel': episodeLabel,
-          if (clipStartSeconds != null) 'clipStartSeconds': clipStartSeconds,
-          if (clipEndSeconds != null) 'clipEndSeconds': clipEndSeconds,
+          'show_id': showId,
+          'recipient_ids': recipientIds,
+          if (episodeId != null) 'episode_id': episodeId,
+          if (episodeLabel != null) 'episode_label': episodeLabel,
+          if (clipStartSeconds != null) 'clip_start_seconds': clipStartSeconds,
+          if (clipEndSeconds != null) 'clip_end_seconds': clipEndSeconds,
           if (message != null && message.isNotEmpty) 'message': message,
         },
       );

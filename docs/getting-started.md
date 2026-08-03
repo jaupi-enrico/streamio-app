@@ -27,9 +27,9 @@ actually answered.
 
 Two things on the **server** side have to agree with that prefix when you mount the app under one:
 
-* the reverse proxy must strip the prefix before forwarding, since the backend registers its
+- the reverse proxy must strip the prefix before forwarding, since the backend registers its
   routes at the root (`/api/…`, `/health`, `/ws/rooms/…`);
-* `APP_URL` must include the prefix. It's what `content.router.ts` builds `CAST_PUBLIC_BASE` from
+- `APP_URL` must include the prefix. It's what `content.router.ts` builds `CAST_PUBLIC_BASE` from
   (`${APP_URL}/api/cast-proxy?url=`), and the Chromecast receiver has no page origin to resolve a
   relative URL against — get this wrong and the master manifest loads while every segment 404s.
 
@@ -53,9 +53,54 @@ the `Video` widget in `watch_screen.dart` comes up solid blue. That's `media_kit
 hardware-accelerated (ANGLE/EGL) texture path, which is broken against the NVIDIA proprietary
 driver's GBM/Wayland integration — the fix (already applied) is `VideoController` on Linux
 constructed with `VideoControllerConfiguration(enableHardwareAcceleration: false)`, forcing
-software-decoded frames into the texture instead. If a *different* rendering glitch shows up on
+software-decoded frames into the texture instead. If a _different_ rendering glitch shows up on
 NVIDIA/Wayland (not the video itself, but window compositing), try forcing XWayland as a
 diagnostic: `GDK_BACKEND=x11 flutter run -d linux`.
+
+### Installing the release build
+
+`flutter build linux --release` doesn't produce an installer — there's no packaging config
+(`.desktop` file, `.deb`, AppImage, Flatpak manifest) checked in for this project. What you get is
+`build/linux/x64/release/bundle/`: a **self-contained, relocatable** directory (the `streamio`
+binary, its bundled `lib/*.so` — including `libmpv` from `media_kit_libs_video` — and `data/` for
+assets/ICU). It only runs in place relative to its own `lib/`; there's nothing to `make install`.
+
+To actually install it for one machine:
+
+```bash
+# 1. Copy the bundle somewhere permanent — don't run it from build/, a clean
+#    rebuild wipes that directory.
+sudo mkdir -p /opt/streamio
+sudo cp -r build/linux/x64/release/bundle/* /opt/streamio/
+
+# 2. Put the binary on PATH (a symlink is fine since the binary locates its
+#    own lib/ and data/ next to itself, not relative to $PWD).
+sudo ln -sf /opt/streamio/streamio /usr/local/bin/streamio
+
+# 3. Optional: an app-launcher entry, so it shows up like any installed app.
+sudo cp assets/icon/app-icon.png /opt/streamio/streamio.png
+cat <<'EOF' | sudo tee /usr/share/applications/streamio.desktop
+[Desktop Entry]
+Type=Application
+Name=Streamio
+Exec=/opt/streamio/streamio
+Icon=/opt/streamio/streamio.png
+Categories=AudioVideo;Player;
+EOF
+```
+
+`/opt` + `/usr/local/bin` + `/usr/share/applications` needs `sudo`; a per-user install works the
+same way rooted at `~/.local/share/streamio`, `~/.local/bin`, and `~/.local/share/applications`
+instead — no root required, and `~/.local/bin` just needs to be on `PATH`.
+
+There's no update channel for the Linux build — re-run the copy step after every
+`flutter build linux --release` you want installed. (The in-app updater in
+`docs/releasing.md` is Android-only: it checks `/api/settings/client-version` and installs an
+APK, which doesn't apply here.)
+
+Distributing it to other machines as a single file (rather than each person running `flutter
+build`) would mean packaging it — `flutter_distributor` or a hand-rolled AppImage/`.deb` are the
+usual routes — but neither is set up in this repo yet.
 
 ## Other commands
 

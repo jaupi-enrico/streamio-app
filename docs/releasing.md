@@ -19,10 +19,16 @@ revisit before this goes any wider (see "Real release signing" at the bottom).
 ```
 
 Does steps 1–4 below interactively: checks the tree is clean and in sync with `origin`, prompts
-for major/minor/patch and a description, bumps `pubspec.yaml` (semver **and** build number),
-runs `flutter pub get`/`analyze`/`test`, builds the release APK, commits (`Release X.Y.Z+N`) and
-pushes, then — after asking — logs into a server as an admin, sets `latest` and `notes` on
-`/api/settings/client-version`, and uploads the APK to `/api/settings/client-version/apk`.
+for major/minor/patch, a description, and whether this update is **mandatory**, bumps
+`pubspec.yaml` (semver **and** build number), runs `flutter pub get`/`analyze`/`test`, builds the
+release APK, commits (`Release X.Y.Z+N`) and pushes, then — after asking — logs into a server as
+an admin, sets `latest` and `notes` on `/api/settings/client-version`, and uploads the APK to
+`/api/settings/client-version/apk`.
+
+If you answered "yes" to mandatory, it raises `minSupported` to the new version and turns
+`enforce` on with one more `PUT` — but only *after* the APK upload succeeds, so older clients are
+never blocked before the download link that fixes them actually works. Answering "no" (the
+default) leaves `minSupported`/`enforce` untouched, same as before this prompt existed.
 
 ### Server URL and admin credentials
 

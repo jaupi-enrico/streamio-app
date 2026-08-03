@@ -31,10 +31,10 @@ class RoomsApi {
       authenticated: true,
       body: {
         'provider': provider,
-        'showId': showId,
-        if (episodeId != null) 'episodeId': episodeId,
-        if (episodeLabel != null) 'episodeLabel': episodeLabel,
-        'contentType': contentType,
+        'show_id': showId,
+        if (episodeId != null) 'episode_id': episodeId,
+        if (episodeLabel != null) 'episode_label': episodeLabel,
+        'content_type': contentType,
       },
     );
     return _room(json);

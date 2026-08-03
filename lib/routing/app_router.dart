@@ -40,7 +40,11 @@ const _publicPrefixes = <String>[
 /// Public routes that stop making sense once you're signed in.
 const _signedOutOnlyPrefixes = <String>['/login', '/register'];
 
-final _rootNavigatorKey = GlobalKey<NavigatorState>();
+/// Exposed (not private) so widgets that sit outside the Router in the tree —
+/// like [UpdateGate], wrapped around `child` in `MaterialApp.router`'s
+/// `builder` — can still reach a [BuildContext] with a [Navigator] ancestor
+/// to show dialogs from.
+final rootNavigatorKey = GlobalKey<NavigatorState>();
 final _shellNavigatorKey = GlobalKey<NavigatorState>();
 
 final appRouterProvider = Provider<GoRouter>((ref) {
@@ -48,7 +52,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
   ref.onDispose(refresh.dispose);
 
   return GoRouter(
-    navigatorKey: _rootNavigatorKey,
+    navigatorKey: rootNavigatorKey,
     initialLocation: '/',
     refreshListenable: refresh,
     redirect: (context, state) {
