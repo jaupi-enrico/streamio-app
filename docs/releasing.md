@@ -21,9 +21,12 @@ revisit before this goes any wider (see "Real release signing" at the bottom).
 Does steps 1–4 below interactively: checks the tree is clean and in sync with `origin`, prompts
 for major/minor/patch, a description, and whether this update is **mandatory**, bumps
 `pubspec.yaml` (semver **and** build number), runs `flutter pub get`/`analyze`/`test`, builds the
-release APK, commits (`Release X.Y.Z+N`) and pushes, then — after asking — logs into a server as
-an admin, sets `latest` and `notes` on `/api/settings/client-version`, and uploads the APK to
-`/api/settings/client-version/apk`.
+release APK, commits (`Release X.Y.Z+N`) and pushes. If the commit was pushed, it then — after
+asking — tags the commit `vX.Y.Z+N`, pushes the tag, and creates a GitHub release for that tag via
+`gh release create`, with the APK attached as a release asset and the description as the release
+notes (requires the `gh` CLI, authenticated: `gh auth login`). Finally — after asking — it logs
+into a server as an admin, sets `latest` and `notes` on `/api/settings/client-version`, and
+uploads the APK to `/api/settings/client-version/apk`.
 
 If you answered "yes" to mandatory, it raises `minSupported` to the new version and turns
 `enforce` on with one more `PUT` — but only *after* the APK upload succeeds, so older clients are
@@ -78,7 +81,7 @@ This is `<semver>+<build number>`.
 
 - **Semver** (`1.1.0`) — what `AppVersion.current` reports as `X-Client-Version` on every
   request, and what you'll type into the server's "Latest app version" / "Minimum supported"
-  fields (step 3). Bump it for anything user-visible: `patch` for a bug fix, `minor` for a new
+  fields (step 4). Bump it for anything user-visible: `patch` for a bug fix, `minor` for a new
   feature, `major` for a breaking change to how the app talks to the server (matching
   `API_VERSION` bumps on the server side, which are rare).
 - **Build number** (`+2`) — must strictly increase on every release, forever, regardless of the
@@ -107,11 +110,27 @@ Sanity-check the version actually baked in before handing it out:
 unzip -p build/app/outputs/flutter-apk/app-release.apk AndroidManifest.xml | strings | grep -A1 versionName
 ```
 
-## 3. Upload it to the server
+## 3. Tag it and create a GitHub release
+
+```bash
+git tag -a "v$(grep -m1 '^version:' pubspec.yaml | sed 's/^version:[[:space:]]*//')" -m "Release ..."
+git push origin --tags
+gh release create "v1.1.0+2" build/app/outputs/flutter-apk/app-release.apk \
+  --title "1.1.0+2" --notes "Fixes sessions getting dropped on app close."
+```
+
+The tag includes the build number (`v1.1.0+2`, not just `v1.1.0`) since the build number, not the
+semver, is what strictly increases every release — two releases can share a semver. This gives the
+release a permanent, downloadable home on GitHub independent of any particular server, and is a
+reasonable value to paste into "Download URL" in step 4 below instead of hosting the APK on the
+server itself.
+
+## 4. Upload it to the server
 
 In the account page, **Admin tab → App Version Policy** (`web/public/account.html`,
 admin-only — gated by `ADMIN_EMAILS`), under "Host the build on this server": pick
-`app-release.apk` from step 2 and hit **Upload APK**.
+`app-release.apk` from step 2 and hit **Upload APK**. (Skip this if you'd rather point
+"Download URL" at the GitHub release from step 3 instead — see the next section.)
 
 That does two things:
 
@@ -129,7 +148,7 @@ type over the Download URL field by hand after uploading, or skip the upload ent
 plain editable field either way. Editing it away from the server's own link doesn't delete the
 uploaded file, it just stops the server from serving it.
 
-## 4. Set the version policy and save
+## 5. Set the version policy and save
 
 Same card, the rest of the fields:
 
@@ -137,13 +156,14 @@ Same card, the rest of the fields:
 |---|---|
 | Latest app version | The semver you just set, e.g. `1.1.0` (no build number) |
 | Minimum supported | Leave alone unless you want older builds blocked, not just nudged |
-| Download URL | Auto-filled by step 3, or paste an external link instead |
+| Download URL | Auto-filled by step 4, or paste the GitHub release link from step 3 instead |
 | Message | Optional — shown in the update prompt ("what's new") |
 | Block outdated apps | Off = suggest only. On = 426s anything below "Minimum supported" |
 
 Then hit **Save**. Raising "Minimum supported" and turning enforcement on rejects every older
 build immediately (`auth/clientVersion.ts`) — only do that once the new build is actually
-reachable at Download URL, i.e. after step 3's upload has landed (or an external link is live).
+reachable at Download URL, i.e. after step 4's upload has landed (or the GitHub release / other
+external link is live).
 
 Same thing via API if you'd rather script the policy fields (the upload itself needs a real
 multipart POST, not shown here — admin JWT required either way):
@@ -169,7 +189,9 @@ listener for a 426 that can arrive on any request — see `updateCheckProvider` 
 - [ ] `pubspec.yaml` version bumped (semver **and** build number)
 - [ ] `flutter analyze` / `flutter test` clean
 - [ ] `flutter build apk --release` built and version-checked
-- [ ] APK uploaded via Admin → App Version Policy (or an external link pasted into Download URL)
+- [ ] Commit pushed, tag `vX.Y.Z+N` pushed, GitHub release created with the APK attached
+- [ ] APK uploaded via Admin → App Version Policy (or the GitHub release link pasted into
+      Download URL)
 - [ ] `latest` (and `notes`, if any) set and saved
 - [ ] Only flip "Block outdated apps" on / raise "Minimum supported" once the build above is live
 

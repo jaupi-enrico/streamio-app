@@ -12,6 +12,7 @@ die() { echo "${RED}error:${RESET} $*" >&2; exit 1; }
 for bin in flutter jq curl git; do
   command -v "$bin" >/dev/null 2>&1 || die "'$bin' is required but not found in PATH."
 done
+# gh is only needed for the (optional) GitHub release step, checked lazily below.
 
 # ── Credentials ────────────────────────────────────────────────
 # scripts/release.env holds the server URL and admin login so a release doesn't
@@ -134,10 +135,35 @@ git commit -m "Release ${new_version}" -m "$notes"
 
 echo
 read -r -p "Push commit to origin/${branch}? [y/N] " confirm_push
+pushed=false
 if [[ "$confirm_push" =~ ^[Yy]$ ]]; then
   git push origin "$branch"
+  pushed=true
 else
   echo "${YELLOW}Skipped push.${RESET} Commit is local only — run 'git push' when ready."
+fi
+
+# ── GitHub release ──────────────────────────────────────────────
+echo
+if [[ "$pushed" == true ]]; then
+  read -r -p "Create a GitHub release for ${new_version} now? [y/N] " confirm_gh_release
+  if [[ "$confirm_gh_release" =~ ^[Yy]$ ]]; then
+    command -v gh >/dev/null 2>&1 || die "'gh' is required to create a GitHub release but not found in PATH."
+    gh auth status >/dev/null 2>&1 || die "'gh' is not authenticated — run 'gh auth login' first."
+
+    tag="v${new_version}"
+    git tag -a "$tag" -m "Release ${new_version}"
+    git push origin "$tag"
+
+    gh release create "$tag" "$apk_path" \
+      --title "${new_version}" \
+      --notes "$notes" \
+      || die "failed to create GitHub release ${tag}. Tag ${tag} was pushed; fix and re-run 'gh release create ${tag} ${apk_path} --title ${new_version} --notes-file -' by hand."
+
+    echo "${GREEN}Created GitHub release ${tag}.${RESET}"
+  fi
+else
+  echo "${YELLOW}Skipping GitHub release${RESET} — commit was never pushed, so there's nothing on origin to tag."
 fi
 
 # ── Upload to server ────────────────────────────────────────────
