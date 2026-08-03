@@ -77,7 +77,18 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
   static const _progressInterval = Duration(seconds: 10);
 
   late final Player _player = Player();
-  late final VideoController _controller = VideoController(_player);
+
+  /// Hardware-accelerated rendering on Linux goes through an ANGLE/EGL
+  /// texture path that's broken on the NVIDIA proprietary driver — the
+  /// video surface comes up solid blue instead of decoded frames. Software
+  /// rendering there is the documented media_kit workaround; other
+  /// platforms keep the (working) default.
+  late final VideoController _controller = VideoController(
+    _player,
+    configuration: VideoControllerConfiguration(
+      enableHardwareAcceleration: !Platform.isLinux,
+    ),
+  );
 
   final _subscriptions = <StreamSubscription<dynamic>>[];
 

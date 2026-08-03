@@ -33,6 +33,30 @@ Two things on the **server** side have to agree with that prefix when you mount 
   (`${APP_URL}/api/cast-proxy?url=`), and the Chromecast receiver has no page origin to resolve a
   relative URL against — get this wrong and the master manifest loads while every segment 404s.
 
+## Linux desktop
+
+The `linux/` embedder is checked in, so `flutter run -d linux` / `flutter build linux` work like
+any other Flutter target as long as the toolchain is present:
+
+```bash
+sudo pacman -S clang cmake ninja pkgconf gtk3        # Arch; Debian/Ubuntu: clang cmake ninja-build pkg-config libgtk-3-dev
+flutter doctor                                        # confirm "Linux toolchain" is a check
+flutter run -d linux                                  # debug run
+flutter build linux --release                         # release bundle: build/linux/x64/release/bundle/
+```
+
+`media_kit_libs_video` vendors its own `libmpv` for the bundled build, so nothing extra is needed
+for playback beyond the toolchain above.
+
+**NVIDIA + Wayland: blue video, not a black/red screen.** The app window itself renders fine; only
+the `Video` widget in `watch_screen.dart` comes up solid blue. That's `media_kit_video`'s
+hardware-accelerated (ANGLE/EGL) texture path, which is broken against the NVIDIA proprietary
+driver's GBM/Wayland integration — the fix (already applied) is `VideoController` on Linux
+constructed with `VideoControllerConfiguration(enableHardwareAcceleration: false)`, forcing
+software-decoded frames into the texture instead. If a *different* rendering glitch shows up on
+NVIDIA/Wayland (not the video itself, but window compositing), try forcing XWayland as a
+diagnostic: `GDK_BACKEND=x11 flutter run -d linux`.
+
 ## Other commands
 
 ```bash
