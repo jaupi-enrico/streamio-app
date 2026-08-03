@@ -1,7 +1,7 @@
 name: streamio
 description: Streamio
 publish_to: "none"
-version: 1.2.1+9
+version: 1.2.2+10
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
