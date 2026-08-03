@@ -20,6 +20,7 @@ import '../../state/auth_providers.dart';
 import '../../state/download_providers.dart';
 import '../../state/server_config_provider.dart';
 import '../../state/cast_providers.dart';
+import '../details/details_providers.dart' show nextEpisodeProvider;
 import '../social/share_sheet.dart';
 import 'cast_sheet.dart';
 import 'room_panel.dart';
@@ -76,6 +77,10 @@ class WatchScreen extends ConsumerStatefulWidget {
 class _WatchScreenState extends ConsumerState<WatchScreen> {
   static const _progressInterval = Duration(seconds: 10);
 
+  /// How long before the end the "next episode" prompt appears — matches
+  /// `watch.js`'s `NEXT_EP_THRESHOLD`.
+  static const _nextEpisodeThreshold = Duration(seconds: 20);
+
   late final Player _player = Player();
 
   /// Hardware-accelerated rendering on Linux goes through an ANGLE/EGL
@@ -125,6 +130,12 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
 
   bool _controlsVisible = true;
   Timer? _hideControlsTimer;
+
+  /// Set by the prompt's cancel button. Once cancelled, autoplay stays off
+  /// for the rest of this screen's life (a new episode is a new
+  /// [WatchScreen], so it resets naturally) — same session-scoped opt-out as
+  /// `watch.js`'s `autoplayNextEnabled`.
+  bool _autoplayNextCancelled = false;
 
   /// Bumped on every [_load]. Lets a stray [_confirmResumePosition] from a
   /// superseded load (server switch, retry) recognize it's stale and stop.
@@ -388,6 +399,17 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
     }
   }
 
+  /// Shared by the skip buttons and the keyboard shortcuts below, so both
+  /// skip by the same 10s and both count as a manual seek.
+  void _seekBy(Duration offset) {
+    _userSeeked = true;
+    _player.seek(_position + offset);
+    // A keyboard skip should surface the controls the same way a tap does,
+    // even if the shortcut fired while they were hidden.
+    if (!_controlsVisible) setState(() => _controlsVisible = true);
+    _resetHideControlsTimer();
+  }
+
   // ── Progress ──────────────────────────────────────────────
 
   void _startProgressTimer() {
@@ -439,10 +461,40 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
   Future<void> _onCompleted() async {
     await _saveProgress(completed: true);
     if (!mounted) return;
-    // `watch.js` shows a next-episode prompt here. The episode list lives on
-    // the details screen, so this points back there rather than guessing at
-    // the next id.
-    showToast(context, 'Finished — pick the next episode from the title page.');
+
+    if (!_isOffline && !_autoplayNextCancelled && _contentType == 'episode' &&
+        widget.showId != null) {
+      final next = await ref.read(nextEpisodeProvider((
+        provider: widget.provider,
+        showId: widget.showId!,
+        episodeId: widget.id,
+      )).future);
+      if (next != null && mounted) {
+        _playNextEpisode(next);
+        return;
+      }
+    }
+
+    if (!mounted) return;
+    showToast(context, "You're all caught up — that was the last episode.");
+  }
+
+  static String _nextEpisodeLabel(Episode episode) {
+    final seasonNumber = episode.season?.number;
+    final prefix = seasonNumber != null ? 'S${seasonNumber.toString().padLeft(2, '0')}' : '';
+    return '${prefix}E${episode.number.toString().padLeft(2, '0')}';
+  }
+
+  void _playNextEpisode(Episode next) {
+    final query = {
+      'contentType': 'episode',
+      'showId': widget.showId!,
+      if (widget.title != null) 'title': widget.title!,
+      'episodeLabel': _nextEpisodeLabel(next),
+    };
+    context.pushReplacement(
+      '/watch/${widget.provider}/${Uri.encodeComponent(next.id)}?${Uri(queryParameters: query).query}',
+    );
   }
 
   // ── Actions ───────────────────────────────────────────────
@@ -627,6 +679,43 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
     }
   }
 
+  // ── Keyboard shortcuts ───────────────────────────────────────
+  //
+  // Desktop/web only in practice (touch platforms don't send key events
+  // here), but harmless everywhere. Bound via `Shortcuts`/`Actions` rather
+  // than a raw key listener so they win over Flutter's *default* shortcuts —
+  // on desktop, arrow keys are bound app-wide to move focus between
+  // focusable widgets (`DirectionalFocusIntent`). Once a control button took
+  // focus (autofocus, a prior Tab, or a click), the arrow keys stopped
+  // seeking and started hopping between buttons instead — from the focused
+  // widget, key lookup walks up through the nearest `Shortcuts` first, and
+  // that used to be the app-level default, not this one. Placing this
+  // `Shortcuts` as an ancestor of the controls intercepts the same keys
+  // first, so the transport commands keep working no matter which button
+  // last had focus.
+
+  Map<ShortcutActivator, Intent> get _playerShortcuts => {
+        const SingleActivator(LogicalKeyboardKey.space): const _PlayPauseIntent(),
+        const SingleActivator(LogicalKeyboardKey.mediaPlayPause): const _PlayPauseIntent(),
+        const SingleActivator(LogicalKeyboardKey.arrowLeft):
+            const _SeekIntent(Duration(seconds: -10)),
+        const SingleActivator(LogicalKeyboardKey.arrowRight):
+            const _SeekIntent(Duration(seconds: 10)),
+        const SingleActivator(LogicalKeyboardKey.escape): const _BackIntent(),
+      };
+
+  Map<Type, Action<Intent>> get _playerActions => {
+        _PlayPauseIntent: CallbackAction<_PlayPauseIntent>(
+          onInvoke: (_) => _player.playOrPause(),
+        ),
+        _SeekIntent: CallbackAction<_SeekIntent>(
+          onInvoke: (intent) => _seekBy(intent.offset),
+        ),
+        _BackIntent: CallbackAction<_BackIntent>(
+          onInvoke: (_) => context.canPop() ? context.pop() : context.go('/'),
+        ),
+      };
+
   // ── UI ────────────────────────────────────────────────────
 
   static String _formatTime(Duration duration) {
@@ -642,6 +731,42 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
   Widget build(BuildContext context) {
     final showChrome = _loading || _error != null || _controlsVisible;
 
+    Episode? nextEpisode;
+    if (!_isOffline && !_autoplayNextCancelled && _contentType == 'episode' &&
+        widget.showId != null) {
+      nextEpisode = ref
+          .watch(nextEpisodeProvider((
+            provider: widget.provider,
+            showId: widget.showId!,
+            episodeId: widget.id,
+          )))
+          .valueOrNull;
+    }
+    final remaining = _duration > Duration.zero ? _duration - _position : Duration.zero;
+    final showNextEpisodePrompt = !_loading &&
+        _error == null &&
+        nextEpisode != null &&
+        remaining > Duration.zero &&
+        remaining <= _nextEpisodeThreshold;
+
+    return Shortcuts(
+      shortcuts: _playerShortcuts,
+      child: Actions(
+        actions: _playerActions,
+        child: Focus(
+          autofocus: true,
+          child: _buildScaffold(showChrome, showNextEpisodePrompt, nextEpisode, remaining),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildScaffold(
+    bool showChrome,
+    bool showNextEpisodePrompt,
+    Episode? nextEpisode,
+    Duration remaining,
+  ) {
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
@@ -685,7 +810,79 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
             )
           else
             Positioned(top: 0, left: 0, right: 0, child: _topBar()),
+          // Outside the controls' fade/hide group on purpose: this should
+          // stay up (and tappable) through the auto-hide timer, the same way
+          // Netflix's own prompt does.
+          // showNextEpisodePrompt is only true when nextEpisode is non-null
+          // (see build()), but that promotion doesn't cross the call into
+          // this method, hence the `!`.
+          if (showNextEpisodePrompt) _nextEpisodePrompt(nextEpisode!, remaining),
         ],
+      ),
+    );
+  }
+
+  Widget _nextEpisodePrompt(Episode next, Duration remaining) {
+    final seconds = remaining.inSeconds.clamp(0, _nextEpisodeThreshold.inSeconds);
+    return Positioned(
+      right: 16,
+      bottom: 100,
+      child: Material(
+        color: Colors.transparent,
+        child: Container(
+          width: 260,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: const Color(0xE61A1A1A),
+            borderRadius: BorderRadius.circular(10),
+            boxShadow: const [
+              BoxShadow(color: Colors.black54, blurRadius: 12, offset: Offset(0, 4)),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Next: ${_nextEpisodeLabel(next)}',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white70, size: 18),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    tooltip: 'Cancel',
+                    onPressed: () => setState(() => _autoplayNextCancelled = true),
+                  ),
+                ],
+              ),
+              if (next.title != null) ...[
+                const SizedBox(height: 2),
+                Text(
+                  next.title!,
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: () => _playNextEpisode(next),
+                  icon: const Icon(Icons.play_arrow),
+                  label: Text('Play now · ${seconds}s'),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -818,10 +1015,7 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
                   children: [
                     IconButton(
                       icon: const Icon(Icons.replay_10, color: Colors.white),
-                      onPressed: () {
-                        _userSeeked = true;
-                        _player.seek(_position - const Duration(seconds: 10));
-                      },
+                      onPressed: () => _seekBy(const Duration(seconds: -10)),
                     ),
                     IconButton(
                       iconSize: 44,
@@ -835,10 +1029,7 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
                     ),
                     IconButton(
                       icon: const Icon(Icons.forward_10, color: Colors.white),
-                      onPressed: () {
-                        _userSeeked = true;
-                        _player.seek(_position + const Duration(seconds: 10));
-                      },
+                      onPressed: () => _seekBy(const Duration(seconds: 10)),
                     ),
                     const SizedBox(width: 12),
                     IconButton(
@@ -872,6 +1063,19 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
       ),
     );
   }
+}
+
+class _PlayPauseIntent extends Intent {
+  const _PlayPauseIntent();
+}
+
+class _SeekIntent extends Intent {
+  const _SeekIntent(this.offset);
+  final Duration offset;
+}
+
+class _BackIntent extends Intent {
+  const _BackIntent();
 }
 
 /// Wraps a libmpv error string so [ErrorState] shows the real message rather
