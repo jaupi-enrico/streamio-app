@@ -144,8 +144,9 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
           context.push(
               '/watch/${widget.provider}/${Uri.encodeComponent(playbackId)}?${Uri(queryParameters: query).query}');
         } catch (err) {
-          if (mounted)
+          if (mounted) {
             showToast(context, ErrorState.messageFor(err), isError: true);
+          }
         }
       });
 
