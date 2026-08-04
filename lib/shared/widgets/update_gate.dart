@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api/api_client.dart';
-import '../../routing/app_router.dart' show rootNavigatorKey;
 import '../../state/update_providers.dart';
 
 /// Wraps the whole app to handle the server's client-version policy.
@@ -28,6 +27,24 @@ class _UpdateGateState extends ConsumerState<UpdateGate> {
   /// Local rather than a provider: this is decided during build, and Riverpod
   /// rightly forbids mutating a provider from a widget life-cycle.
   bool _promptShown = false;
+
+  /// This widget's own overlay for the prompt, deliberately *not* a route
+  /// pushed on the router's Navigator. GoRouter drives that Navigator
+  /// declaratively via its `pages` list, and a redirect firing shortly after
+  /// the dialog opens (auth bootstrap settling, a silent-refresh-driven
+  /// `refreshListenable` tick, anything that makes GoRouter recompute pages)
+  /// reconciles the Navigator against the new list and evicts any route that
+  /// was pushed imperatively — which made the dialog vanish near-instantly.
+  /// An overlay layered above `child` here isn't part of that Navigator at
+  /// all, so router redirects can't touch it.
+  final GlobalKey<OverlayState> _overlayKey = GlobalKey<OverlayState>();
+  OverlayEntry? _promptEntry;
+
+  @override
+  void dispose() {
+    _promptEntry?.remove();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -59,56 +76,71 @@ class _UpdateGateState extends ConsumerState<UpdateGate> {
       _maybePrompt(info.latest, info.notes, info.downloadUrl!);
     }
 
-    return widget.child;
+    return Overlay(
+      key: _overlayKey,
+      initialEntries: [OverlayEntry(builder: (_) => widget.child)],
+    );
   }
 
   void _maybePrompt(String? latest, String? notes, String downloadUrl) {
     if (_promptShown) return;
     _promptShown = true;
 
-    // Deferred: this runs during build, and showing a dialog synchronously
-    // from build throws.
+    // Deferred: this runs during build, and inserting into the overlay
+    // synchronously from build throws.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      // Not `context`: this widget wraps `child` in `MaterialApp.router`'s
-      // `builder`, which places it *above* the Router's Navigator in the
-      // tree, not inside it — `showDialog(context: context)` would find no
-      // Navigator ancestor and silently fail to show anything. The router's
-      // own navigator key gives a context that's actually inside it.
-      final navContext = rootNavigatorKey.currentContext;
-      if (navContext == null) return;
-      showDialog<void>(
-        context: navContext,
-        builder: (context) => AlertDialog(
-          title: const Text('Update available'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(latest == null
-                  ? 'A newer version of Streamio is available.'
-                  : 'Streamio $latest is available.'),
-              if (notes != null) ...[
-                const SizedBox(height: 12),
-                Text(notes, style: Theme.of(context).textTheme.bodySmall),
-              ],
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Later'),
+      final overlay = _overlayKey.currentState;
+      if (overlay == null) return;
+
+      void dismiss() {
+        _promptEntry?.remove();
+        _promptEntry = null;
+      }
+
+      _promptEntry = OverlayEntry(
+        builder: (context) => Stack(
+          children: [
+            ModalBarrier(
+              color: Colors.black54,
+              dismissible: true,
+              onDismiss: dismiss,
             ),
-            FilledButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-                _openDownload(downloadUrl);
-              },
-              child: const Text('Update'),
+            Center(
+              child: AlertDialog(
+                title: const Text('Update available'),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(latest == null
+                        ? 'A newer version of Streamio is available.'
+                        : 'Streamio $latest is available.'),
+                    if (notes != null) ...[
+                      const SizedBox(height: 12),
+                      Text(notes, style: Theme.of(context).textTheme.bodySmall),
+                    ],
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: dismiss,
+                    child: const Text('Later'),
+                  ),
+                  FilledButton(
+                    onPressed: () {
+                      dismiss();
+                      _openDownload(downloadUrl);
+                    },
+                    child: const Text('Update'),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
       );
+      overlay.insert(_promptEntry!);
     });
   }
 
