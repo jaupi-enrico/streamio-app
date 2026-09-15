@@ -1,0 +1,126 @@
+name: streamio
+description: Streamio
+publish_to: "none"
+version: 1.8.3+28
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # State management
+  flutter_riverpod: ^3.4.2
+
+  # HTTP to the Streamio backend (api_client) and to CDNs while downloading
+  dio: ^5.7.0
+
+  # Server address + provider choice (the web app's localStorage)
+  shared_preferences: ^2.3.2
+
+  # Fonts (Bebas Neue + DM Sans, like the Google Fonts <link> tags)
+  google_fonts: ^8.2.1
+
+  # Cached network images for posters/banners (better than raw Image.network)
+  cached_network_image: ^3.4.1
+
+  # Routing (maps to /, /catalog, /search, /providers, /account, /details, ...)
+  go_router: ^17.4.0
+
+  # Download queue + offline library
+  drift: ^2.21.0
+  path: ^1.9.0
+  path_provider: ^2.1.4
+
+  # Video playback (HLS + custom headers, demuxed audio/video)
+  media_kit: ^1.1.11
+  media_kit_video: ^2.0.1
+  media_kit_libs_video: ^1.0.5
+
+  # Auth / secure storage / OAuth
+  #
+  # Held at 10 on purpose. 10 is the release that migrates entries written by
+  # the deprecated EncryptedSharedPreferences backend (everything <= 9 wrote);
+  # 11 deletes that migration path, so jumping 9 -> 11 in one release silently
+  # loses the tokens *and* the download master key — every existing download
+  # becomes undecryptable. Bump to 11 only in a release *after* one shipped on
+  # 10, so installs have had a launch to migrate.
+  flutter_secure_storage: ^10.3.1
+  flutter_web_auth_2: ^5.0.3
+
+  # The QR code on the TV sign-in screen. Pure Dart (a CustomPainter over a
+  # Dart QR encoder) — no native side, so it adds nothing to the plugin
+  # surface that `flutter build apk` has to keep working.
+  qr_flutter: ^4.1.0
+
+  # Flushes offline playback progress when connectivity returns
+  connectivity_plus: ^7.3.1
+
+  # Watch-party realtime channel (/ws/rooms/:code)
+  web_socket_channel: ^3.0.1
+
+  # Offline downloads: AES-CTR at rest (seekable, so the loopback player can
+  # serve byte ranges without decrypting a whole segment file)
+  pointycastle: ^4.0.0
+
+  # Share sheet for watch-party invite links
+  share_plus: ^13.3.0
+
+  # Opens the download URL when the server says this build is out of date
+  url_launcher: ^6.3.1
+
+  # This build's own version, reported as X-Client-Version. Already in the tree
+  # transitively (media_kit_video -> wakelock_plus -> package_info_plus), so
+  # naming it here adds no native plugin — it just makes the dependency honest.
+  package_info_plus: ^10.2.1
+
+  # Chromecast sender (uses the deployment's own receiver id)
+  flutter_chrome_cast: ^1.4.6
+
+  # Download ids, temp manifest filenames
+  uuid: ^4.5.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+  # Only drift generates code here; freezed/json_serializable/riverpod_generator
+  # were carried over from an earlier iteration and had nothing to generate.
+  build_runner: ^2.4.13
+  drift_dev: ^2.21.0
+  flutter_launcher_icons: ^0.14.4
+
+  # The in-memory FlutterSecureStoragePlatform fake used in widget_test.dart —
+  # the real plugin blocks indefinitely on a desktop test VM.
+  flutter_secure_storage_platform_interface: ^2.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/icon/
+    # Bebas Neue + DM Sans, bundled rather than fetched at runtime — see
+    # shared/theme/app_theme.dart. google_fonts matches these by filename, so
+    # the names are the Google Fonts API's own and must not be changed; the
+    # weights are exactly the ones the text theme asks for.
+    - assets/google_fonts/
+
+# Launcher icons, generated from the website's own mark
+# (web/public/icons/site-icon.png) so the app and the site read as one thing.
+# Regenerate after changing the source art:
+#   dart run flutter_launcher_icons
+flutter_launcher_icons:
+  image_path: "assets/icon/app-icon.png"
+
+  android: true
+  # The source art is black on transparent, so it needs a backdrop to be a
+  # launcher icon at all — white, which is how the favicon reads on a browser
+  # tab. The adaptive foreground is padded to survive the launcher's mask.
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/icon/app-icon-foreground.png"
+
+  ios: true
+  # iOS rejects icons with an alpha channel.
+  remove_alpha_ios: true

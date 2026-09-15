@@ -1,0 +1,715 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
+
+import '../../shared/user_facing_error.dart';
+import '../app_version.dart';
+import 'paged_response.dart';
+import 'token_store.dart';
+
+/// Raised when a request needs a session and there isn't a usable one left
+/// (no refresh token, or the refresh itself was rejected). The router listens
+/// for this via [ApiClient.onAuthLost] and sends the user to /login.
+class SessionExpiredException implements Exception {
+  const SessionExpiredException([this.message = 'Session expired']);
+  final String message;
+  @override
+  String toString() => message;
+}
+
+/// What came of an attempt to renew the access token.
+///
+/// The distinction that matters is [transient] vs [dead]: only the latter is
+/// the server saying the refresh token is no good. A 429, a 5xx, a proxy that
+/// swallowed the call, or no connection at all say nothing about the session,
+/// and treating them as a sign-out is how a working login gets thrown away.
+/// A 2xx whose body isn't JSON. Internal: [ApiClient._send] catches it to
+/// retry, and turns whatever survives into a [ServerNotReadyException].
+class _NonJsonResponseException implements Exception {
+  const _NonJsonResponseException(this.statusCode);
+  final int statusCode;
+}
+
+/// The server answered, but with a page rather than data.
+///
+/// A proxy in front of the install can serve a static waiting page — a plain
+/// 200 of HTML — while the host behind it is still coming up, and a
+/// deployment may power that host down whenever it has been idle. So this is a
+/// normal state to arrive at, not a malformed API. It says nothing about the
+/// session, and must never be treated as an auth failure.
+///
+/// An [ApiException] subclass so existing `on ApiException` handlers keep
+/// working; they just get a message that names the real situation instead of
+/// "Unexpected response from the server (not JSON)".
+class ServerNotReadyException extends ApiException {
+  const ServerNotReadyException({super.statusCode})
+      : super(
+          'The server is not ready yet — it may still be starting up. '
+          'Give it a moment and try again.',
+        );
+}
+
+enum _RefreshOutcome {
+  /// A new access token is in the store; replay the request.
+  refreshed,
+
+  /// The refresh didn't happen, but the session is still presumed good.
+  transient,
+
+  /// The server rejected the refresh token, or there was none. Signed out.
+  dead,
+}
+
+/// Raised when the server refuses this build as too old (HTTP 426), which it
+/// does once an admin turns enforcement on for a `minSupported` above this
+/// version. Unlike [SessionExpiredException] this is not about the session —
+/// signing in again changes nothing, only installing a newer build does — so
+/// it must never be treated as an auth failure that clears stored tokens.
+///
+/// It can arrive on *any* request at *any* time, not just at launch: the floor
+/// is raised server-side while the app is running.
+class ClientOutdatedException implements Exception, UserFacingError {
+  const ClientOutdatedException({
+    required this.message,
+    this.minSupported,
+    this.latest,
+    this.downloadUrl,
+    this.notes,
+  });
+
+  @override
+  final String message;
+  final String? minSupported;
+  final String? latest;
+  final String? downloadUrl;
+  final String? notes;
+
+  @override
+  String toString() => message;
+}
+
+/// A failed API call, carrying the server's own `{ error: "..." }` message so
+/// screens can surface it instead of a generic "something went wrong".
+class ApiException implements Exception, UserFacingError {
+  const ApiException(this.message, {this.statusCode});
+
+  @override
+  final String message;
+  final int? statusCode;
+
+  bool get isNotFound => statusCode == 404;
+  bool get isForbidden => statusCode == 403;
+
+  @override
+  String toString() => message;
+}
+
+/// The single HTTP entry point to the backend.
+///
+/// Mirrors the contract of `apiFetch()` in `public/scripts/auth.js`: attach
+/// the bearer token, and on a 401 try exactly one silent refresh and replay
+/// the request; a second 401 tears the session down. Concurrent 401s share
+/// one in-flight refresh rather than each rotating the (single-use, rotating)
+/// refresh token and invalidating one another.
+///
+/// Requests come in three flavours, matching the backend's three middlewares:
+/// no auth at all, `authenticated: true` for a `requireAuth` route, and
+/// `optionalAuth: true` for a route mounted under `optionalAuth` — one that
+/// answers logged out but personalises its answer when it can see who is
+/// asking. That last one is the app's counterpart to `fetchPublic` in
+/// `../web/public/scripts/auth.js`, and it is not optional in practice: the
+/// 18+ gates are resolved from `req.user`, so a content request sent without a
+/// token is answered as a guest, with every gate shut.
+class ApiClient {
+  ApiClient({required String baseUrl, TokenStore? tokens, Dio? dio})
+      : _baseUrl = baseUrl,
+        tokens = tokens ?? TokenStore(),
+        _dio = dio ?? Dio() {
+    _dio.options = _dio.options.copyWith(
+      baseUrl: baseUrl,
+      connectTimeout: const Duration(seconds: 20),
+      receiveTimeout: const Duration(seconds: 30),
+      headers: {
+        ..._dio.options.headers,
+        // Opts this client into the native-token flow on the backend.
+        'X-Client': 'app',
+        // Lets the server decide whether this build is current, so the app
+        // never re-implements the comparison. Omitted if the version couldn't
+        // be read — the server then treats it as older than any floor.
+        if (AppVersion.current != null) 'X-Client-Version': AppVersion.current!,
+      },
+      // Non-2xx is handled explicitly below so the server's error body is
+      // still available to read.
+      validateStatus: (status) => status != null && status < 500,
+      // Redirects are followed by hand in [_followRedirects] — never by
+      // dart:io. Its auto-follow drops the Authorization header on the way to
+      // the new host, so an authenticated GET arrives anonymous and 401s. A
+      // Streamio install commonly sits behind a hostname that redirects to
+      // whatever address is actually serving it, which makes every such
+      // request cross-host.
+      followRedirects: false,
+    );
+  }
+
+  static const _maxRedirects = 5;
+
+  /// Backoff for a server that answered with its waiting page. Deliberately
+  /// short — this runs inside a pull-to-refresh, and a host that is genuinely
+  /// booting won't be back inside any tolerable wait.
+  static const _notReadyRetryDelays = [
+    Duration(seconds: 1),
+    Duration(seconds: 2),
+  ];
+
+  final String _baseUrl;
+  final Dio _dio;
+  final TokenStore tokens;
+
+  Future<_RefreshOutcome>? _refreshInFlight;
+  final _authLost = StreamController<void>.broadcast();
+  final _clientOutdated = StreamController<ClientOutdatedException>.broadcast();
+
+  String get baseUrl => _baseUrl;
+
+  /// Emits when the session is gone and the user has to log in again.
+  Stream<void> get onAuthLost => _authLost.stream;
+
+  /// Emits when the server rejects this build as too old. Surfaced app-wide
+  /// (rather than left to each caller) because the answer is the same
+  /// everywhere: nothing will work again until the user installs a new build.
+  Stream<ClientOutdatedException> get onClientOutdated => _clientOutdated.stream;
+
+  /// Renews the access token outside the request path, for the one caller
+  /// that can't go through it: the watch-party WebSocket, which carries the
+  /// access token in its handshake URL and so cannot retry a 401 the way a
+  /// request does. Returns true when a new token is in the store.
+  ///
+  /// Shares the in-flight refresh with the request path, and never emits
+  /// [onAuthLost] — a socket that can't authenticate is a reason to stop
+  /// reconnecting, not to throw the user out of the app.
+  Future<bool> renewAccessToken() async =>
+      await _refreshOnce() == _RefreshOutcome.refreshed;
+
+  void dispose() {
+    _authLost.close();
+    _clientOutdated.close();
+    _dio.close(force: true);
+  }
+
+  /// Absolute URL for a path on this server — needed wherever a URL is handed
+  /// to something that isn't this client (the media player, the Cast sender,
+  /// the WebSocket room connection).
+  String absolute(String path) =>
+      path.startsWith('http') ? path : '$_baseUrl$path';
+
+  /// `wss://host/ws/rooms/...` for this origin.
+  String webSocketUrl(String path) {
+    final uri = Uri.parse(absolute(path));
+    return uri.replace(scheme: uri.scheme == 'https' ? 'wss' : 'ws').toString();
+  }
+
+  Future<T> get<T>(
+    String path, {
+    Map<String, dynamic>? query,
+    bool authenticated = false,
+    bool optionalAuth = false,
+  }) =>
+      _send<T>('GET', path,
+          query: query,
+          authenticated: authenticated,
+          optionalAuth: optionalAuth);
+
+  /// A GET whose response is a bare JSON array plus the paging headers the
+  /// account listings send — see [PagedResponse] for why the numbers live
+  /// there and not in the body.
+  ///
+  /// [parse] turns one element into a [T]; non-map elements are skipped, the
+  /// same tolerance the unpaged list calls already have.
+  Future<PagedResponse<T>> getPaged<T>(
+    String path,
+    T Function(Map<String, dynamic>) parse, {
+    Map<String, dynamic>? query,
+    bool authenticated = false,
+    bool optionalAuth = false,
+  }) async {
+    final (json, response) = await _sendWithResponse<List<dynamic>>(
+      'GET',
+      path,
+      query: query,
+      authenticated: authenticated,
+      optionalAuth: optionalAuth,
+    );
+
+    final items = json
+        .whereType<Map>()
+        .map((e) => parse(e.cast<String, dynamic>()))
+        .toList(growable: false);
+
+    // A header that is absent, empty or not a number is "the server didn't
+    // say" — which for `X-Page-Rows` means an install predating paging, where
+    // the page was never filtered down and the list length is the truth.
+    int? header(String name) {
+      final raw = response.headers.value(name);
+      return raw == null ? null : int.tryParse(raw.trim());
+    }
+
+    final rows = header('x-page-rows');
+    return PagedResponse<T>(
+      items: items,
+      pageRows: rows ?? items.length,
+      // Absent header — not a zero — is what says the server doesn't page.
+      paged: rows != null,
+      total: header('x-total-count'),
+    );
+  }
+
+  Future<T> post<T>(
+    String path, {
+    Object? body,
+    Map<String, dynamic>? query,
+    bool authenticated = false,
+    bool optionalAuth = false,
+  }) =>
+      _send<T>('POST', path,
+          body: body,
+          query: query,
+          authenticated: authenticated,
+          optionalAuth: optionalAuth);
+
+  Future<T> put<T>(
+    String path, {
+    Object? body,
+    Map<String, dynamic>? query,
+    bool authenticated = false,
+  }) =>
+      _send<T>('PUT', path,
+          body: body, query: query, authenticated: authenticated);
+
+  Future<T> patch<T>(
+    String path, {
+    Object? body,
+    Map<String, dynamic>? query,
+    bool authenticated = false,
+  }) =>
+      _send<T>('PATCH', path,
+          body: body, query: query, authenticated: authenticated);
+
+  Future<T> delete<T>(
+    String path, {
+    Object? body,
+    Map<String, dynamic>? query,
+    bool authenticated = false,
+  }) =>
+      _send<T>('DELETE', path,
+          body: body, query: query, authenticated: authenticated);
+
+  /// Runs the call, retrying while the server answers with something that
+  /// isn't data at all.
+  ///
+  /// A deployment may power its host down once it has been idle (see
+  /// `IdleShutdownService`), with the proxy in front of it serving a static
+  /// waiting page — a plain 200 of HTML — until the box is back.
+  /// Sitting in the player is the app's longest stretch of near-zero API
+  /// traffic, so coming back out to a menu refresh is exactly when it finds
+  /// the server asleep. A short retry covers a proxy caught mid-rotation; a
+  /// genuinely booting host takes far longer than any budget worth blocking a
+  /// screen on, so past that the caller gets [ServerNotReadyException], whose
+  /// message says what is actually going on.
+  ///
+  /// Only GET is retried — a write may not be idempotent.
+  Future<T> _send<T>(
+    String method,
+    String path, {
+    Object? body,
+    Map<String, dynamic>? query,
+    bool authenticated = false,
+    bool optionalAuth = false,
+  }) async =>
+      (await _sendWithResponse<T>(method, path,
+              body: body,
+              query: query,
+              authenticated: authenticated,
+              optionalAuth: optionalAuth))
+          .$1;
+
+  /// [_send], but handing back the [Response] as well.
+  ///
+  /// Only [getPaged] needs it — the account listings put their paging numbers
+  /// in headers rather than in the body, so something has to see past
+  /// [_unwrap]. Kept as the one implementation so the retry loop, the
+  /// hand-rolled redirect following and the 401-refresh-replay can't diverge
+  /// between the two.
+  Future<(T, Response<dynamic>)> _sendWithResponse<T>(
+    String method,
+    String path, {
+    Object? body,
+    Map<String, dynamic>? query,
+    bool authenticated = false,
+    bool optionalAuth = false,
+  }) async {
+    for (var attempt = 0;; attempt++) {
+      final response = await _sendOnce(method, path,
+          body: body,
+          query: query,
+          authenticated: authenticated,
+          optionalAuth: optionalAuth);
+      try {
+        return (_unwrap<T>(response), response);
+      } on _NonJsonResponseException catch (err) {
+        if (method != 'GET' || attempt >= _notReadyRetryDelays.length) {
+          throw ServerNotReadyException(statusCode: err.statusCode);
+        }
+        await Future<void>.delayed(_notReadyRetryDelays[attempt]);
+      }
+    }
+  }
+
+  Future<Response<dynamic>> _sendOnce(
+    String method,
+    String path, {
+    Object? body,
+    Map<String, dynamic>? query,
+    bool authenticated = false,
+    bool optionalAuth = false,
+  }) async {
+    var response = await _followRedirects(
+      await _raw(method, path,
+          body: body,
+          query: query,
+          authenticated: authenticated,
+          optionalAuth: optionalAuth),
+      method: method,
+      body: body,
+      authenticated: authenticated || optionalAuth,
+    );
+
+    if (response.statusCode == 401 && authenticated) {
+      final outcome = await _refreshOnce();
+      if (outcome == _RefreshOutcome.dead) {
+        _authLost.add(null);
+        throw const SessionExpiredException();
+      }
+      if (outcome == _RefreshOutcome.transient) {
+        // The session is still good; renewing it just didn't get through.
+        // Fail this one call and let the caller retry.
+        throw const ApiException(
+          'Could not renew the session. Check your connection and try again.',
+        );
+      }
+      response = await _followRedirects(
+        await _raw(method, path, body: body, query: query, authenticated: true),
+        method: method,
+        body: body,
+        authenticated: true,
+      );
+
+      if (response.statusCode == 401) {
+        await tokens.clear();
+        _authLost.add(null);
+        throw const SessionExpiredException();
+      }
+    }
+
+    return response;
+  }
+
+  /// Replays a request against a `Location` when the server redirects.
+  ///
+  /// dart:io only auto-follows redirects for GET and HEAD, so every write the
+  /// app makes — sign-in, resolving a stream, saving progress, watchlist,
+  /// ratings, shares, rooms — surfaces the 3xx raw and would otherwise fail
+  /// with "Request failed (HTTP 302)". That's not hypothetical here: an
+  /// install is commonly reached through a front end whose whole job is to
+  /// redirect, and reverse proxies routinely bounce a request to a canonical
+  /// host or path.
+  ///
+  /// The method and body are preserved across the hop, including for 301/302
+  /// where a browser would downgrade to GET. A browser does that for the sake
+  /// of history and forms; replaying a `POST /api/auth/login` as a bodyless
+  /// GET would just fail. What's wanted here is the same call, at the address
+  /// the server named.
+  Future<Response<dynamic>> _followRedirects(
+    Response<dynamic> response, {
+    required String method,
+    Object? body,
+    required bool authenticated,
+  }) async {
+    var current = response;
+
+    for (var hop = 0; hop < _maxRedirects; hop++) {
+      final status = current.statusCode ?? 0;
+      if (status < 300 || status > 399) return current;
+
+      final location = current.headers.value('location');
+      if (location == null || location.isEmpty) return current;
+
+      final from = current.realUri;
+      final target = from.resolve(location);
+
+      // Don't carry the bearer token onto a plaintext hop; a redirect that
+      // downgrades https→http is either a misconfiguration or an attack, and
+      // neither deserves the token.
+      final downgraded = from.scheme == 'https' && target.scheme == 'http';
+
+      final headers = <String, String>{};
+      if (authenticated && !downgraded) {
+        final token = await tokens.accessToken;
+        if (token != null) headers['Authorization'] = 'Bearer $token';
+      }
+
+      try {
+        current = await _dio.request<dynamic>(
+          target.toString(),
+          data: body,
+          options: Options(method: method, headers: headers),
+        );
+      } on DioException catch (err) {
+        if (err.response != null) return err.response!;
+        throw ApiException(_networkMessage(err));
+      }
+    }
+
+    return current;
+  }
+
+  Future<Response<dynamic>> _raw(
+    String method,
+    String path, {
+    Object? body,
+    Map<String, dynamic>? query,
+    bool authenticated = false,
+    bool optionalAuth = false,
+  }) async {
+    final headers = <String, String>{};
+    if (authenticated || optionalAuth) {
+      // No usable access token (fresh launch with a stored refresh token, or
+      // one that has aged out): get one before the call rather than burning a
+      // 401 — and, on an [optionalAuth] route, rather than being served as a
+      // guest with no 401 to react to at all.
+      if (!await tokens.hasFreshAccessToken) {
+        final outcome = await _refreshOnce();
+        // An optionalAuth route works logged out by design, so neither a dead
+        // session nor an unreachable refresh is a reason to fail the call or
+        // to throw the user out of the app; the request just goes anonymous.
+        if (!optionalAuth) {
+          if (outcome == _RefreshOutcome.dead) {
+            _authLost.add(null);
+            throw const SessionExpiredException('Not authenticated');
+          }
+          if (outcome == _RefreshOutcome.transient) {
+            throw const ApiException(
+              'Could not reach the server to renew the session.',
+            );
+          }
+        }
+      }
+      final current = await tokens.accessToken;
+      if (current != null) headers['Authorization'] = 'Bearer $current';
+    }
+
+    try {
+      return await _dio.request<dynamic>(
+        path,
+        data: body,
+        queryParameters: query,
+        options: Options(method: method, headers: headers),
+      );
+    } on DioException catch (err) {
+      if (err.response != null) return err.response!;
+      throw ApiException(_networkMessage(err));
+    }
+  }
+
+  /// One refresh at a time. The backend rotates refresh tokens on use
+  /// (`rotateRefreshToken`), so two parallel refreshes would race and one
+  /// would revoke the other's brand-new token.
+  /// Reports whether a *new* access token was actually obtained — not merely
+  /// whether one happens to be lying around. Reporting success without having
+  /// refreshed would send the caller off to replay a request with the very
+  /// token that just 401'd.
+  Future<_RefreshOutcome> _refreshOnce() {
+    final pending = _refreshInFlight;
+    if (pending != null) return pending;
+
+    final future = _doRefresh()
+        // Anything unforeseen in here is a failed refresh, never a verdict on
+        // the session; _doRefresh only clears tokens when the server says to.
+        .catchError((Object _) => _RefreshOutcome.transient)
+        .whenComplete(() => _refreshInFlight = null);
+
+    _refreshInFlight = future;
+    return future;
+  }
+
+  Future<_RefreshOutcome> _doRefresh() async {
+    final refreshToken = await tokens.refreshToken;
+    if (refreshToken == null) {
+      // Nothing to refresh with, and the caller only asks after a 401 (or
+      // with no access token at all), so there is no session left to save.
+      return _RefreshOutcome.dead;
+    }
+
+    final body = {'refresh_token': refreshToken};
+
+    final Response<dynamic> response;
+    try {
+      // Redirects are followed by hand here for the same reason as every
+      // other call: this client has auto-follow off, and an install behind a
+      // redirecting front end answers with a 3xx. Left unfollowed it looks
+      // like a non-200 — which used to be read as "the server rejected the
+      // token" and signed the user out on the spot.
+      response = await _followRedirects(
+        await _dio.post<dynamic>('/api/auth/refresh', data: body),
+        method: 'POST',
+        body: body,
+        authenticated: false,
+      );
+    } on DioException {
+      // Unreachable server, timeout, TLS failure: says nothing about the
+      // session, so the stored tokens stay put for the next attempt.
+      return _RefreshOutcome.transient;
+    } on ApiException {
+      return _RefreshOutcome.transient;
+    }
+
+    final status = response.statusCode ?? 0;
+    final data = response.data;
+
+    if (status == 200 && data is Map) {
+      final access = data['access_token']?.toString();
+      if (access == null) return _RefreshOutcome.transient;
+      await tokens.save(
+        accessToken: access,
+        refreshToken: data['refresh_token']?.toString(),
+      );
+      return _RefreshOutcome.refreshed;
+    }
+
+    // Only the auth endpoint's own verdict ends a session. Everything else a
+    // server or a proxy in between can answer with — 429 from the refresh
+    // rate limiter, 502/504 from a tunnel that dropped, a 3xx that led
+    // nowhere, an HTML error page — is a failed attempt, not a sign-out.
+    if (status == 401 || status == 403) {
+      await tokens.clear();
+      return _RefreshOutcome.dead;
+    }
+
+    return _RefreshOutcome.transient;
+  }
+
+  T _unwrap<T>(Response<dynamic> response) {
+    final status = response.statusCode ?? 0;
+    var data = response.data;
+
+    if (status >= 200 && status < 300) {
+      // A redirect hop or a proxy in front of the install can hand back a
+      // 2xx whose body Dio didn't auto-decode as JSON — a missing/wrong
+      // Content-Type is enough to make its transformer give up and return
+      // the raw text. Decode it ourselves rather than crash the isolate on
+      // an unhandled cast failure.
+      if (data is String && data is! T) {
+        final text = data.trim();
+        if (text.isEmpty) {
+          // An empty 2xx — a 204, or a handler that just ends the response —
+          // is "no content", not malformed JSON.
+          data = null;
+        } else {
+          try {
+            data = jsonDecode(text);
+          } on FormatException {
+            // The body is a page, not data. Logged in full-ish here because
+            // the user-facing message deliberately doesn't dump HTML at a
+            // viewer, and this is the only place the actual cause is visible.
+            debugPrint(
+              '[api] ${response.realUri} answered $status with '
+              '${response.headers.value('content-type')} that is not JSON: '
+              '${text.substring(0, text.length.clamp(0, 120))}',
+            );
+            throw _NonJsonResponseException(status);
+          }
+        }
+      }
+      if (T == Null) return null as T;
+      if (data == null) {
+        // `null as T` is a bare TypeError for a caller that asked for a Map
+        // or a List, which tells whoever hits it nothing. Name it instead.
+        if (null is T) return null as T;
+        throw ApiException(
+          'The server returned an empty response.',
+          statusCode: status,
+        );
+      }
+      if (data is! T) {
+        throw ApiException(
+          'Unexpected response from the server.',
+          statusCode: status,
+        );
+      }
+      return data;
+    }
+
+    if (status == 426) {
+      final outdated = _outdatedFrom(data);
+      _clientOutdated.add(outdated);
+      throw outdated;
+    }
+
+    throw ApiException(_errorMessage(data, status, response), statusCode: status);
+  }
+
+  /// Builds the exception from the `client` payload the 426 carries, so the
+  /// blocking screen can name the version and link the download.
+  ClientOutdatedException _outdatedFrom(dynamic data) {
+    final map = data is Map ? data.cast<String, dynamic>() : const <String, dynamic>{};
+    final client = (map['client'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+    String? str(Object? value) {
+      final text = value?.toString().trim();
+      return (text == null || text.isEmpty) ? null : text;
+    }
+
+    return ClientOutdatedException(
+      message: str(map['message']) ??
+          'This version of the app is no longer supported. Please update to continue.',
+      minSupported: str(client['minSupported']),
+      latest: str(client['latest']),
+      downloadUrl: str(client['downloadUrl']),
+      notes: str(client['notes']),
+    );
+  }
+
+  String _errorMessage(dynamic data, int status, Response<dynamic> response) {
+    if (data is Map) {
+      final message = data['error'] ?? data['message'];
+      if (message != null) return message.toString();
+    }
+
+    // A 3xx here means the redirect couldn't be followed (no Location, or too
+    // many hops). Naming the target makes a proxy loop diagnosable instead of
+    // just "HTTP 302".
+    if (status >= 300 && status <= 399) {
+      final location = response.headers.value('location');
+      return location == null
+          ? 'The server redirected without saying where (HTTP $status). '
+              'Check the reverse proxy in front of it.'
+          : 'The server kept redirecting to $location. '
+              'Check the reverse proxy in front of it.';
+    }
+
+    return 'Request failed (HTTP $status)';
+  }
+
+  String _networkMessage(DioException err) => switch (err.type) {
+        DioExceptionType.connectionTimeout ||
+        DioExceptionType.sendTimeout ||
+        DioExceptionType.receiveTimeout =>
+          'The server took too long to respond.',
+        DioExceptionType.badCertificate =>
+          'The server\'s TLS certificate was rejected.',
+        DioExceptionType.connectionError =>
+          'Could not reach the server. Check the address and your connection.',
+        _ => err.message ?? 'Network error',
+      };
+}
