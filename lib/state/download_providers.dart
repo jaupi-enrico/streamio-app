@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/db/app_database.dart';
+import '../core/download/download_keep_alive.dart';
 import '../core/download/download_manager.dart';
 import '../core/download/local_media_server.dart';
 import '../core/download/segment_store.dart';
@@ -25,6 +26,18 @@ final downloadManagerProvider = Provider<DownloadManager>((ref) {
   );
   ref.onDispose(manager.dispose);
   return manager;
+});
+
+/// Runs the Android foreground service while anything downloads, so a
+/// download survives the app being backgrounded or swiped away. Watched from
+/// `startupTasksProvider`.
+final downloadKeepAliveProvider = Provider<DownloadKeepAlive>((ref) {
+  final keepAlive = DownloadKeepAlive(
+    manager: ref.watch(downloadManagerProvider),
+    database: ref.watch(appDatabaseProvider),
+  );
+  ref.onDispose(keepAlive.dispose);
+  return keepAlive;
 });
 
 /// The loopback server used for offline playback. Started on demand by the

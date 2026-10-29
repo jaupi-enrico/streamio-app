@@ -135,6 +135,9 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
 
   late final Player _player = Player();
 
+  /// Pauses playback once the Activity is gone (see initState).
+  late final AppLifecycleListener _lifecycle;
+
   /// Set once a decoder error has forced this session off the zero-copy
   /// Android output (see [_zeroCopyVideo]). Static so a box that can't use it
   /// pays the one failed open once, not on every title.
@@ -320,6 +323,13 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
     // Playback is a lean-back experience; the UI mode is restored in
     // dispose() so the rest of the app is unaffected.
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    // On Android the engine can outlive the Activity (EngineHolder.kt keeps
+    // it for background downloads), so swiping the app away no longer tears
+    // this screen down — without this the title would play on, unseen.
+    _lifecycle = AppLifecycleListener(onDetach: () {
+      unawaited(_player.pause());
+      unawaited(_saveProgress());
+    });
     _wirePlayerStreams();
     _wireCastAutoLoad();
     _wireCastProgress();
@@ -676,6 +686,7 @@ class _WatchScreenState extends ConsumerState<WatchScreen> {
     // Fire-and-forget: the widget is going away, but the last position is
     // worth persisting.
     unawaited(_saveProgress());
+    _lifecycle.dispose();
     _progressTimer?.cancel();
     _hideControlsTimer?.cancel();
     _stallWatchdog?.cancel();

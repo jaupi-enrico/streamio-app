@@ -476,9 +476,34 @@ The files are invisible to other apps, the gallery and file managers, and a segm
 device is unplayable without the keystore key. It is not DRM against the device's owner and isn't
 presented as such.
 
-**Known limitation:** downloads run in-process — leaving or force-quitting the app pauses them; no
-foreground service is wired up. Progress recorded while watching offline is stored locally and
-pushed to `POST /api/account/history` when the server is next reachable (`offline_sync.dart`).
+**Background downloads (Android only).** Downloads still run in Dart, in-process; Android keeps
+that process and its Dart isolate alive:
+
+- **`EngineHolder.kt` owns the Flutter engine, not `MainActivity`.** The Activity attaches to a
+  cached engine (`provideFlutterEngine`, `shouldDestroyEngineWithHost() = false`), so swiping the
+  app out of Recents leaves the isolate, and every download in it, running. Reopening the app
+  reattaches to the same engine. With nothing downloading, `destroyIfIdle()` destroys the engine
+  with the Activity exactly as before. **Engine-scoped channels are registered in `EngineHolder`,
+  never in `configureFlutterEngine`**: that runs on every attach, and `CastControlChannel` there
+  would register a second Cast session listener per reattach.
+- **`DownloadService.kt`** is a `dataSync` foreground service with the progress notification
+  ("Pause all" action), plus a partial wake lock and a Wi-Fi lock. It downloads nothing itself.
+  `DownloadKeepAlive` (`download_keep_alive.dart`) starts it when `DownloadManager.activeIds`
+  becomes non-empty, feeds it progress at most once a second, and stops it when idle, all over
+  `streamio/downloads` (`download_foreground.dart`, no-op off Android). Android 15 caps `dataSync`
+  at 6h a day: `onTimeout` pauses everything cleanly. A foreground service can't be *started* from
+  the background, which is fine, since downloads start from the UI or at launch.
+- **A real kill** (OEM battery killers, a crash) still loses the process. The next launch's
+  `reconcileOnStartup` returns the interrupted rows and `startup.dart` resumes them once per
+  process with `resume(quiet: true)`, which leaves a row paused rather than failed when the server
+  can't be reached.
+- Because the engine can outlive the Activity, the watch screen pauses its player on
+  `AppLifecycleState.detached`. Anything else that plays or polls must expect to keep running with
+  no UI, too.
+
+iOS and desktop have none of this: leaving the app pauses downloads there. Progress recorded while
+watching offline is stored locally and pushed to `POST /api/account/history` when the server is
+next reachable (`offline_sync.dart`).
 
 State: `lib/state/download_providers.dart`; schema in `lib/core/db/app_database.dart`.
 

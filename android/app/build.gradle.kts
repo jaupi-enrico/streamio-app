@@ -49,6 +49,10 @@ dependencies {
     // plugin's android/build.gradle: two different versions on one classpath
     // is a dependency-resolution surprise waiting for a plugin upgrade.
     implementation("com.google.android.gms:play-services-cast-framework:21.5.0")
+
+    // NotificationCompat/ServiceCompat for DownloadService.kt. Plugins already
+    // bring androidx.core in, but only on their own modules' classpaths.
+    implementation("androidx.core:core-ktx:1.17.0")
 }
 
 flutter {

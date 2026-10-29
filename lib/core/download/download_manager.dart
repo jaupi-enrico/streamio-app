@@ -95,6 +95,18 @@ class DownloadManager {
 
   bool isActive(String downloadId) => _active.containsKey(downloadId);
 
+  /// Downloads fetching right now — what the Android foreground service is
+  /// kept up for.
+  Iterable<String> get activeIds => _active.keys;
+
+  /// Pauses everything running: the notification's "Pause all", and the
+  /// Android 15 `dataSync` time limit.
+  void pauseAll() {
+    for (final id in [..._active.keys]) {
+      pause(id);
+    }
+  }
+
   void dispose() {
     for (final active in _active.values) {
       active.cancelled = true;
@@ -105,12 +117,20 @@ class DownloadManager {
   }
 
   /// Anything left `downloading` when the app was killed isn't running now.
-  /// Mark it paused so the UI offers "resume" rather than a stuck spinner.
-  Future<void> reconcileOnStartup() async {
+  /// Mark it paused so the UI offers "resume" rather than a stuck spinner,
+  /// and return those ids so the caller can resume them.
+  ///
+  /// One this manager is actually running is left alone: rows only read
+  /// `downloading` *and* idle after a kill.
+  Future<List<String>> reconcileOnStartup() async {
+    final interrupted = <String>[];
     for (final row in await _db.interruptedDownloads()) {
+      if (isActive(row.id)) continue;
       await _db.updateDownload(
           row.id, const DownloadsCompanion(status: Value(DownloadStatus.paused)));
+      interrupted.add(row.id);
     }
+    return interrupted;
   }
 
   // ── Planning ──────────────────────────────────────────────
@@ -231,7 +251,7 @@ class DownloadManager {
         if (track.kind == TrackKind.video) duration = track.media.totalDuration;
         for (var i = 0; i < track.media.segments.length; i++) {
           final segment = track.media.segments[i];
-          final key = segment.key;
+          final (keyUri, keyIv) = _upstreamKeyColumns(segment);
           rows.add(DownloadSegmentsCompanion.insert(
             downloadId: id,
             kind: track.kind,
@@ -239,10 +259,8 @@ class DownloadManager {
             sourceUrl: segment.url,
             fileName: '${track.kind.name}_$i.bin',
             durationSeconds: Value(segment.durationSeconds),
-            keyUri: Value(key != null && key.isAes128 ? key.uri : null),
-            keyIv: Value(key != null && key.isAes128
-                ? SegmentStore.bytesToHex(ivForSegment(segment))
-                : null),
+            keyUri: keyUri,
+            keyIv: keyIv,
           ));
         }
       }
@@ -271,7 +289,10 @@ class DownloadManager {
     return id;
   }
 
-  Future<void> resume(String downloadId) async {
+  /// [quiet] is for resumes nobody asked for (after a kill, at launch): one
+  /// that can't re-resolve — the app opened offline, say — leaves the row
+  /// paused for the user to retry, rather than marking it failed.
+  Future<void> resume(String downloadId, {bool quiet = false}) async {
     if (_active.containsKey(downloadId)) return;
 
     final row = await _db.findDownload(downloadId);
@@ -283,6 +304,7 @@ class DownloadManager {
     try {
       await _refreshSegmentUrls(row);
     } catch (err) {
+      if (quiet) return;
       await _db.updateDownload(
         downloadId,
         DownloadsCompanion(
@@ -367,20 +389,35 @@ class DownloadManager {
       for (final segment in existing) {
         if (segment.done) continue;
         if (segment.index >= track.media.segments.length) continue;
+        final fresh = track.media.segments[segment.index];
+        // insertOrReplace rewrites the whole row, so the key columns must be
+        // carried over too — left out, they came back null and a resumed
+        // segment was stored still under the upstream AES-128, unplayable.
+        final (keyUri, keyIv) = _upstreamKeyColumns(fresh);
         updates.add(DownloadSegmentsCompanion.insert(
           downloadId: row.id,
           kind: track.kind,
           index: segment.index,
-          sourceUrl: track.media.segments[segment.index].url,
+          sourceUrl: fresh.url,
           fileName: segment.fileName,
           durationSeconds: Value(segment.durationSeconds),
           done: const Value(false),
+          keyUri: keyUri,
+          keyIv: keyIv,
         ));
       }
     }
 
     if (updates.isNotEmpty) await _db.insertSegments(updates);
     _refreshedHeaders[row.id] = plan.headers;
+  }
+
+  /// The `keyUri`/`keyIv` columns for [segment]: its upstream AES-128 key, or
+  /// null for both when it isn't encrypted (or uses a method we don't undo).
+  static (Value<String?>, Value<String?>) _upstreamKeyColumns(HlsSegment segment) {
+    final key = segment.key;
+    if (key == null || !key.isAes128) return (const Value(null), const Value(null));
+    return (Value(key.uri), Value(SegmentStore.bytesToHex(ivForSegment(segment))));
   }
 
   /// Headers from the most recent re-resolve, so a resumed download keeps

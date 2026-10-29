@@ -8,10 +8,16 @@ import 'api_providers.dart';
 import 'auth_providers.dart';
 import 'download_providers.dart';
 
+/// Whether this process already resumed what a kill interrupted.
+var _resumedInterrupted = false;
+
 /// One-time work after the app has a server and (maybe) a session:
 ///
-///  * downloads left mid-flight by a kill are marked paused, so the UI offers
-///    "resume" instead of showing a stuck spinner;
+///  * downloads left mid-flight by a kill are marked paused, then resumed —
+///    once per process, so a server change (which disposes the manager and
+///    with it every running download) doesn't restart them behind the user;
+///  * the Android foreground service is kept in step with running downloads
+///    ([downloadKeepAliveProvider]);
 ///  * progress recorded while offline is pushed to the server, and re-pushed
 ///    whenever connectivity comes back.
 ///
@@ -19,7 +25,15 @@ import 'download_providers.dart';
 /// server change (which rebuilds the API client this depends on).
 final startupTasksProvider = Provider<StreamSubscription<dynamic>?>((ref) {
   final manager = ref.watch(downloadManagerProvider);
-  unawaited(manager.reconcileOnStartup());
+  ref.watch(downloadKeepAliveProvider);
+  unawaited(() async {
+    final interrupted = await manager.reconcileOnStartup();
+    if (_resumedInterrupted) return;
+    _resumedInterrupted = true;
+    for (final id in interrupted) {
+      await manager.resume(id, quiet: true);
+    }
+  }());
 
   Future<void> flushOfflineProgress() async {
     if (!ref.read(isSignedInProvider)) return;

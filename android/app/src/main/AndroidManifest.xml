@@ -95,6 +95,13 @@
             android:name="com.google.android.gms.cast.framework.media.MediaNotificationService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
+
+        <!-- Keeps offline downloads running in the background and after the
+             app is swiped away (DownloadService.kt, EngineHolder.kt). -->
+        <service
+            android:name=".DownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

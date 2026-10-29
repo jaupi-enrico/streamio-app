@@ -179,8 +179,11 @@ class AppDatabase extends _$AppDatabase {
           ..addColumns([downloadSegments.kind])
           ..where(downloadSegments.downloadId.equals(downloadId)))
         .get();
+    // `read` on a converted column returns the raw SQL int, not the enum —
+    // `whereType<TrackKind>()` then dropped every row, so the offline master
+    // never declared the audio rendition and downloads played silent.
     return rows
-        .map((row) => row.read(downloadSegments.kind))
+        .map((row) => row.readWithConverter<TrackKind, int>(downloadSegments.kind))
         .whereType<TrackKind>()
         .toSet();
   }
